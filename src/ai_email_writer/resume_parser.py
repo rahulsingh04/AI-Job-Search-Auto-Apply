@@ -32,37 +32,132 @@ class CandidateProfile(BaseModel):
     education: str = Field(default="", description="Highest educational degree and institution")
     technical_skills: List[str] = Field(default_factory=list, description="Categorized or bulleted list of technical skills")
     projects: List[str] = Field(default_factory=list, description="Key projects or technical domain achievements")
+    extraction_method: str = Field(default="LLM (Pydantic)", description="Engine used to extract profile: 'LLM (Pydantic)' or 'Regex Fallback'")
 
 
 # ==============================================================================
-# Text Extraction Helper
+# Text Extraction Helpers (PDF, Word .docx/.doc, Plain Text)
 # ==============================================================================
 
-def extract_text_from_file(file_path_or_bytes: Union[str, Path, bytes], filename: str = "") -> str:
-    """Extract plain text from PDF or text file."""
+def extract_docx_text(file_source: Union[str, Path, Any]) -> str:
+    """Extract plain text from a Word .docx file using python-docx or standard zipfile/xml fallback."""
+    import io
+
+    # Normalize input into bytes or a seekable BytesIO stream
+    if isinstance(file_source, bytes):
+        file_obj = io.BytesIO(file_source)
+    elif isinstance(file_source, (str, Path)):
+        p = Path(file_source)
+        if not p.is_file():
+            return ""
+        file_obj = io.BytesIO(p.read_bytes())
+    elif hasattr(file_source, "read"):
+        file_source.seek(0)
+        file_obj = io.BytesIO(file_source.read())
+    else:
+        file_obj = io.BytesIO(bytes(file_source))
+
+    # 1. Try python-docx if installed
+    try:
+        import docx
+        file_obj.seek(0)
+        doc = docx.Document(file_obj)
+        paragraphs = [p.text for p in doc.paragraphs if p.text]
+        if paragraphs:
+            return "\n".join(paragraphs).strip()
+    except Exception:
+        pass
+
+    # 2. Standard-library zipfile + XML parsing (zero external dependencies)
+    try:
+        import zipfile
+        import xml.etree.ElementTree as ET
+        file_obj.seek(0)
+        with zipfile.ZipFile(file_obj) as z:
+            xml_content = z.read("word/document.xml")
+            tree = ET.fromstring(xml_content)
+            ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+            paragraphs = []
+            for p in tree.findall(".//w:p", ns):
+                texts = [node.text for node in p.findall(".//w:t", ns) if node.text]
+                if texts:
+                    paragraphs.append("".join(texts))
+            return "\n".join(paragraphs).strip()
+    except Exception:
+        pass
+
+    return ""
+
+
+def extract_doc_legacy_text(file_source: Union[str, Path, Any]) -> str:
+    """Extract readable text spans from legacy binary Word 97-2003 .doc format."""
+    try:
+        if isinstance(file_source, bytes):
+            raw_bytes = file_source
+        elif isinstance(file_source, (str, Path)):
+            raw_bytes = Path(file_source).read_bytes()
+        elif hasattr(file_source, "read"):
+            file_source.seek(0)
+            raw_bytes = file_source.read()
+        else:
+            raw_bytes = bytes(file_source)
+
+        text = raw_bytes.decode("latin-1", errors="ignore")
+        clean_lines = []
+        for chunk in re.findall(r"[\x20-\x7E\t\r\n]{4,}", text):
+            c = chunk.strip()
+            if len(c) > 3 and not re.search(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", c):
+                clean_lines.append(c)
+        return "\n".join(clean_lines).strip()
+    except Exception:
+        return ""
+
+
+def extract_text_from_file(file_path_or_bytes: Union[str, Path, bytes, Any], filename: str = "") -> str:
+    """
+    Extract plain text from PDF, Word (.docx, .doc), or text files (.txt).
+    Handles both raw bytes (from Streamlit file uploader) and filesystem Path objects.
+    """
+    import io
+
     # 1. If bytes or uploaded file buffer
     if isinstance(file_path_or_bytes, bytes):
-        if filename.lower().endswith(".pdf"):
-            import io
+        fn = filename.lower()
+        if fn.endswith(".pdf"):
             import pypdf
             reader = pypdf.PdfReader(io.BytesIO(file_path_or_bytes))
             pages = [page.extract_text() or "" for page in reader.pages]
             return "\n".join(pages).strip()
+        elif fn.endswith(".docx"):
+            return extract_docx_text(file_path_or_bytes)
+        elif fn.endswith(".doc"):
+            return extract_doc_legacy_text(file_path_or_bytes)
         else:
-            return file_path_or_bytes.decode("utf-8", errors="ignore").strip()
+            try:
+                return file_path_or_bytes.decode("utf-8").strip()
+            except UnicodeDecodeError:
+                return file_path_or_bytes.decode("latin-1", errors="ignore").strip()
 
     # 2. If path string / Path object
     path = Path(file_path_or_bytes).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Resume file not found at: {path}")
 
-    if path.suffix.lower() == ".pdf":
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
         import pypdf
         reader = pypdf.PdfReader(str(path))
         pages = [page.extract_text() or "" for page in reader.pages]
         return "\n".join(pages).strip()
+    elif suffix == ".docx":
+        return extract_docx_text(path)
+    elif suffix == ".doc":
+        return extract_doc_legacy_text(path)
     else:
-        return path.read_text(encoding="utf-8", errors="ignore").strip()
+        try:
+            return path.read_text(encoding="utf-8").strip()
+        except UnicodeDecodeError:
+            return path.read_text(encoding="latin-1", errors="ignore").strip()
 
 
 # ==============================================================================
@@ -243,6 +338,7 @@ def validate_and_fix_profile(raw_data: Union[Dict[str, Any], CandidateProfile], 
             education=data.get("education", ""),
             technical_skills=data.get("technical_skills", []),
             projects=data.get("projects", []),
+            extraction_method=data.get("extraction_method", "Regex Fallback"),
         )
 
     return validated
@@ -253,53 +349,60 @@ def validate_and_fix_profile(raw_data: Union[Dict[str, Any], CandidateProfile], 
 # ==============================================================================
 
 def parse_resume_to_profile(
-    file_path_or_bytes: Union[str, Path, bytes],
+    file_path_or_bytes: Union[str, Path, bytes, Any],
     filename: str = "",
     use_llm: bool = True
 ) -> CandidateProfile:
     """
     Parse resume into verified CandidateProfile:
-    1. Extracts raw text.
-    2. Tries LLM structured extraction (if enabled).
-    3. Falls back to Regex & heuristic extraction on failure or error.
-    4. Validates and auto-repairs with Pydantic.
+    1. Extracts raw text from PDF, Word (.docx, .doc), or text file.
+    2. Primary: Tries LLM structured extraction with Pydantic schema (if enabled & online).
+    3. Fallback: Automatically falls back to Regex & heuristic pattern extraction if LLM is offline or fails.
+    4. Validates and auto-repairs fields with Pydantic.
     """
     raw_text = extract_text_from_file(file_path_or_bytes, filename)
     if not raw_text.strip():
-        raise ValueError("Could not extract any text from the provided resume file.")
+        raise ValueError("Could not extract any readable text from the provided resume file.")
 
-    # 1. Try Primary: LLM Structured Output
+    # 1. Try Primary: LLM Structured Output with Pydantic
     if use_llm:
         try:
             from langchain_core.messages import SystemMessage, HumanMessage
             from .model import llm
 
-            structured_profile_llm = llm.with_structured_output(
-                CandidateProfile,
-                method="json_mode",
-            )
+            if llm is not None:
+                structured_profile_llm = llm.with_structured_output(
+                    CandidateProfile,
+                    method="json_mode",
+                )
 
-            prompt = f"""Extract the candidate profile information from the following resume text into the required JSON format:
+                prompt = f"""Extract the candidate profile information from the following resume text into the required JSON format:
 
 RESUME TEXT:
 {raw_text[:4000]}
 """
-            response = structured_profile_llm.invoke([
-                SystemMessage(content="You are an expert resume parser. Extract accurate information into the required CandidateProfile JSON schema. If any field is not found, provide a concise placeholder or leave empty."),
-                HumanMessage(content=prompt),
-            ])
+                response = structured_profile_llm.invoke([
+                    SystemMessage(content="You are an expert resume parser. Extract accurate information into the required CandidateProfile JSON schema. If any field is not found, leave empty."),
+                    HumanMessage(content=prompt),
+                ])
 
-            if isinstance(response, CandidateProfile):
-                return validate_and_fix_profile(response, raw_text)
-            elif isinstance(response, dict):
-                return validate_and_fix_profile(response, raw_text)
+                if isinstance(response, CandidateProfile):
+                    profile = validate_and_fix_profile(response, raw_text)
+                    profile.extraction_method = "LLM (Pydantic)"
+                    return profile
+                elif isinstance(response, dict):
+                    profile = validate_and_fix_profile(response, raw_text)
+                    profile.extraction_method = "LLM (Pydantic)"
+                    return profile
 
         except Exception as exc:
             print(f"[ResumeParser Fallback] LLM extraction encountered: {exc}. Falling back to Regex parser.")
 
     # 2. Fallback: Regex & Heuristic Scraper
     regex_profile = extract_profile_via_regex(raw_text)
-    return validate_and_fix_profile(regex_profile, raw_text)
+    profile = validate_and_fix_profile(regex_profile, raw_text)
+    profile.extraction_method = "Regex Fallback"
+    return profile
 
 
 def save_candidate_profile_config(profile: CandidateProfile, target_path: Path = None) -> Path:

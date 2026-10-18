@@ -15,6 +15,7 @@ try:
         format=_config.get("output_format", "json"),
         num_ctx=_config.get("context_window", 8192),
         num_predict=_config.get("max_tokens", 512),
+        timeout=float(_config.get("timeout", 25.0)),
     )
     structured_llm = llm.with_structured_output(
         EmailResponse,

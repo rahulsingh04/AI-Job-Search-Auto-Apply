@@ -282,15 +282,15 @@ python -m streamlit run app.py
 The web dashboard is organized into 4 specialized tabs:
 
 ### 💬 Tab 1: Chat & Auto-Email
-- **Resume Upload & AI Profile Extractor**: Parses candidate PDF/TXT resumes using regex and Pydantic schema validation.
+- **Resume Upload & Multi-Format Profile Extractor**: Supports **PDF**, **Word** (`.docx`, `.doc`), and **Plain Text** (`.txt`). Uses a dual-engine extraction architecture: primary **Pydantic LLM structured output**, with automatic **Regex & heuristic fallback** when Ollama is offline or unresponsive.
 - **Recipient Database Location & Ingestion**:
   - Specify any database file (`.json`, `.csv`, `.xlsx`, `.txt`).
   - Native file browser dialog (`🗂️ Navigate & Choose File`) to load contacts directly into memory.
   - **In-Memory Ready Inspector**: Quickly inspect loaded recipient emails with the popover viewer (`👁️ View Emails Loaded in Memory`).
   - **Script Scraper & Auto-Backups**: Paste raw text or job descriptions to scrape emails. The system creates an immutable backup (`Email_Storage_<date>_<time>.json`) before adding new contacts.
-- **Real-Time Streaming Outreach**: Streams progressive live progress per recipient:
+- **Real-Time Streaming Outreach & Universal Fallback**: Streams progressive live progress per recipient:
   - Subject line length validation and mobile client truncation preview.
-  - LLM personalization (with automatic fallback to generic template if offline).
+  - **Universal Fallback Engine**: If Ollama is offline, times out, or returns incomplete output, it automatically falls back to the generic/static outreach template with personalized salutations.
   - Live remaining count and delivery status.
 
 ### 🔍 Tab 2: Dynamic Subject, Body & System Prompt

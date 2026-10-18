@@ -2,24 +2,33 @@
     "project_name": "ai-job-auto-apply",
     "version": "0.2.0",
     "candidate_profile": {
-        "name": "transformer encoderdecoderencoderdecoder",
-        "current_role": "Data Scientist",
-        "previous_role": "",
-        "experience_summary": "3+ years of professional Data Science experience",
-        "education": "",
+        "name": "JOHN DOE",
+        "current_role": "DATA SCIENTIST  |  MACHINE LEARNING  |  ANALYTICS",
+        "previous_role": "Data Scientist with 3+ years of experience building end-to-end machine learning and analytics solutions",
+        "experience_summary": "3+ years of experience",
+        "education": "behavior, and convert analysis into prioritized actions and dashboards.",
         "technical_skills": [
-            "Python Programming and SQL",
-            "Machine Learning: XGBoost, Random Forest, Scikit-Learn",
-            "Deep Learning: TensorFlow, Keras, PyTorch",
-            "Generative AI & LLMs: LangChain, Ollama, RAG Architectures",
-            "Data Processing: Pandas, NumPy, PySpark",
-            "Data Visualization: Matplotlib, Seaborn, Plotly"
+            "Developed repeatable Python and SQL data pipelines for 1M+ synthetic event records",
+            "adding schema checks and data-quality alerts that reduced manual QA effort by an estimated 30%.",
+            "Partnered with product and operations stakeholders to define success metrics",
+            "explain model behavior",
+            "and convert analysis into prioritized actions and dashboards.",
+            "Performed exploratory analysis",
+            "missing-value treatment",
+            "categorical encoding",
+            "and feature selection across structured customer and operations datasets.",
+            "Compared logistic regression",
+            "random forest",
+            "and gradient-boosting models using cross-validation and precision-recall analysis; documented assumptions",
+            "limitations",
+            "and trade-offs."
         ],
         "projects": [
             "Predictive Modelling and Healthcare Risk Analytics",
             "Automotive Part Identification and Machine Learning",
             "Generative AI and Agentic Workflow Pipelines"
-        ]
+        ],
+        "extraction_method": "Regex Fallback"
     },
     "email_config": {
         "sender_email": "javarahul04@gmail.com",

@@ -210,3 +210,38 @@ def build_fallback_email(
         body=normalized,
     )
 
+
+def generate_email_with_fallback(
+    recipient_email: str,
+    general_subject: str,
+    general_body: str,
+    system_prompt: Optional[str] = None,
+) -> tuple[EmailResponse, bool, str]:
+    """
+    Safely generates outreach email for a recipient:
+    1. Attempts AI personalization with local LLM.
+    2. If LLM is offline, times out, throws errors, or produces incomplete output,
+       it automatically falls back to the formatted generic/static body.
+
+    Returns:
+        tuple of (EmailResponse, used_llm: bool, status_reason: str)
+    """
+    try:
+        res = generate_professional_email(
+            recipient_email=recipient_email,
+            general_subject=general_subject,
+            general_body=general_body,
+            system_prompt=system_prompt,
+        )
+        return res, True, "Personalized by AI for recipient"
+    except LLMUnavailableError as err:
+        fallback = build_fallback_email(recipient_email, general_subject, general_body)
+        return fallback, False, f"LLM offline or unreachable ({err}). Using generic body fallback."
+    except IncompleteEmailError as err:
+        fallback = build_fallback_email(recipient_email, general_subject, general_body)
+        return fallback, False, f"Incomplete AI generation ({err}). Using generic body fallback."
+    except Exception as err:
+        fallback = build_fallback_email(recipient_email, general_subject, general_body)
+        return fallback, False, f"AI generation error ({err}). Using generic body fallback."
+
+

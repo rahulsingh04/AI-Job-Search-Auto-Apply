@@ -222,10 +222,10 @@ with tab_chat:
     # 1. Dedicated Resume Upload & Profile Extractor
     with st.expander("📄 Upload Resume & Extract Candidate Profile", expanded=False):
         uploaded_resume_file = st.file_uploader(
-            "Upload Resume (PDF or TXT)",
-            type=["pdf", "txt"],
+            "Upload Resume (PDF, Word, or TXT)",
+            type=["pdf", "docx", "doc", "txt"],
             key="chat_resume_uploader",
-            help="Upload your resume. The AI will parse and validate your candidate profile into candidate_profile.json.",
+            help="Upload your resume in PDF, Word (.docx, .doc), or Text (.txt) format. The AI will parse and validate your candidate profile into candidate_profile.json.",
         )
 
         if uploaded_resume_file is not None:
@@ -236,7 +236,7 @@ with tab_chat:
 
             cache_key = f"parsed_{uploaded_resume_file.name}"
             if cache_key not in st.session_state:
-                with st.spinner("Parsing resume with AI & Pydantic Validation..."):
+                with st.spinner("Extracting candidate profile (Pydantic LLM with Regex Fallback)..."):
                     try:
                         parsed_profile = parse_resume_to_profile(
                             file_path_or_bytes=save_dest,
@@ -245,9 +245,13 @@ with tab_chat:
                         )
                         saved_cfg = save_candidate_profile_config(parsed_profile)
                         st.session_state[cache_key] = parsed_profile.model_dump()
-                        st.success(f"✅ Successfully parsed profile for **{parsed_profile.name}**! Saved to `{saved_cfg.name}`.")
+                        method_used = getattr(parsed_profile, "extraction_method", "Regex Fallback")
+                        if "LLM" in method_used:
+                            st.success(f"🤖 **Profile Extracted via Pydantic LLM** for **{parsed_profile.name}**! Saved to `{saved_cfg.name}`.")
+                        else:
+                            st.info(f"⚡ **Profile Extracted via Regex Fallback** for **{parsed_profile.name}** (Ollama offline/bypassed). Saved to `{saved_cfg.name}`.")
                     except Exception as err:
-                        st.error(f"Error parsing resume: {err}")
+                        st.error(f"Error extracting resume profile: {err}")
 
             if cache_key in st.session_state:
                 pdata = st.session_state[cache_key]
@@ -256,6 +260,7 @@ with tab_chat:
                     st.markdown(f"**Candidate:** `{pdata.get('name', 'N/A')}`")
                     st.markdown(f"**Current Role:** `{pdata.get('current_role', 'N/A')}`")
                     st.markdown(f"**Experience:** `{pdata.get('experience_summary', 'N/A')}`")
+                    st.caption(f"Extraction Mode: `{pdata.get('extraction_method', 'Auto-Extracted')}`")
                 with col_p2:
                     st.markdown(f"**Education:** `{pdata.get('education', 'N/A')}`")
                     st.markdown(f"**Skills Identified:** `{len(pdata.get('technical_skills', []))} skills`")
@@ -556,7 +561,7 @@ with tab_chat:
         elif not user_body_input.strip():
             st.error("Please enter a generic body before sending.")
         elif not st.session_state.uploaded_resume_path or not Path(st.session_state.uploaded_resume_path).is_file():
-            st.error("Please attach a valid resume PDF file.")
+            st.error("Please upload or select a valid resume file (PDF, Word, or TXT).")
         elif not recipients_list:
             st.error("No recipient emails found! Please paste emails in the box above or load a valid database file (.json, .csv, .xlsx, .txt).")
         else:

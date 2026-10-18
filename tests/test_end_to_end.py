@@ -242,3 +242,110 @@ def test_requirements_txt_is_rejected_and_defaults_to_email_storage():
     assert len(recipients) > 0
     assert all("@" in r for r in recipients)
 
+
+# ==============================================================================
+# 7. Multi-Format Resume Parsing (PDF, Word docx/doc, TXT) & Regex Fallback
+# ==============================================================================
+def test_resume_parser_multi_format_and_fallback(tmp_path):
+    import zipfile
+    from ai_email_writer.resume_parser import (
+        extract_text_from_file,
+        extract_profile_via_regex,
+        parse_resume_to_profile,
+        CandidateProfile,
+    )
+
+    resume_sample_text = """Rahul Kumar Singh
+Data Scientist at Tech Innovators
+3+ years of combined Data Science experience in Machine Learning and Generative AI.
+Education: B.Tech in Computer Science Engineering, AKTU
+
+Technical Skills:
+- Programming: Python, SQL
+- Machine Learning: Scikit-Learn, XGBoost, Random Forest
+- Deep Learning & GenAI: PyTorch, TensorFlow, LangChain, Ollama, RAG
+
+Key Projects:
+- Healthcare Predictive Analytics: Built patient risk modeling pipeline.
+- Automotive Part Classification: Computer vision deep learning models.
+"""
+
+    # 1. Plain Text Resume Extraction
+    txt_file = tmp_path / "resume_test.txt"
+    txt_file.write_text(resume_sample_text, encoding="utf-8")
+    extracted_txt = extract_text_from_file(txt_file)
+    assert "Rahul Kumar Singh" in extracted_txt
+    assert "Data Scientist" in extracted_txt
+
+    # 2. Word .docx Resume Extraction (Standard zipfile/XML structure)
+    docx_file = tmp_path / "resume_test.docx"
+    with zipfile.ZipFile(docx_file, "w") as z:
+        xml_content = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>Rahul Kumar Singh</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Data Scientist at Tech Innovators</w:t></w:r></w:p>
+    <w:p><w:r><w:t>3+ years of combined Data Science experience</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Education: B.Tech in Computer Science Engineering</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Technical Skills: Python, Machine Learning, Deep Learning, Generative AI</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Projects: Predictive Analytics Pipeline, Agentic Workflows</w:t></w:r></w:p>
+  </w:body>
+</w:document>"""
+        z.writestr("word/document.xml", xml_content)
+
+    extracted_docx = extract_text_from_file(docx_file)
+    assert "Rahul Kumar Singh" in extracted_docx
+    assert "Data Scientist" in extracted_docx
+
+    # 3. Regex & Heuristic Fallback Extractor
+    profile_regex = extract_profile_via_regex(resume_sample_text)
+    assert isinstance(profile_regex, CandidateProfile)
+    assert "Rahul" in profile_regex.name
+    assert "Data Scientist" in profile_regex.current_role
+    assert len(profile_regex.technical_skills) > 0
+    assert len(profile_regex.projects) > 0
+
+    # 4. parse_resume_to_profile with fallback
+    profile = parse_resume_to_profile(docx_file, use_llm=False)
+    assert isinstance(profile, CandidateProfile)
+    assert profile.extraction_method == "Regex Fallback"
+    assert "Rahul" in profile.name
+
+
+# ==============================================================================
+# 8. Fallback Approach: If LLM is unavailable or fails -> Generic Body
+# ==============================================================================
+def test_email_generator_generic_body_fallback():
+    from ai_email_writer.generator import generate_email_with_fallback, build_fallback_email
+
+    generic_body = """I am a Data Scientist with 3 years of experience building AI models.
+
+My core skills include:
+• Python & Machine Learning
+• Deep Learning & PyTorch
+• Generative AI & RAG
+
+Best regards,
+Rahul Singh"""
+
+    # Direct fallback test
+    fallback_res = build_fallback_email(
+        recipient_email="recruiter@innovate.com",
+        general_subject="Application for AI Role",
+        general_body=generic_body,
+    )
+    assert fallback_res.body.startswith("Hi,") or fallback_res.body.startswith("Dear")
+    assert "Rahul Singh" in fallback_res.body
+    assert fallback_res.subject == "Application for AI Role"
+
+    # generate_email_with_fallback safely handles any LLM condition
+    res, used_llm, note = generate_email_with_fallback(
+        recipient_email="jane.doe@enterprise.org",
+        general_subject="Application for Data Scientist",
+        general_body=generic_body,
+    )
+    assert res is not None
+    assert len(res.body) > 0
+    assert "Jane Doe" in res.body
+
+
