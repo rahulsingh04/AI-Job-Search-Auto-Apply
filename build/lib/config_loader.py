@@ -92,9 +92,10 @@ def get_generic_email_prefixes() -> List[str]:
 
 
 def get_recipients() -> List[str]:
-    """Load list of recipient email addresses."""
-    config = load_project_config()
-    if "recipients" in config:
-        return config["recipients"]
-    data = _read_json(CONFIG_DIR / "recipients.json")
-    return data.get("emails", [])
+    """Load list of recipient email addresses dynamically from active Email_Storage.json."""
+    storage_file = PROJECT_ROOT / "bin" / "data" / "Email_Storage.json"
+    if storage_file.is_file():
+        storage_data = _read_json(storage_file)
+        if isinstance(storage_data, dict):
+            return list(storage_data.keys())
+    return []

@@ -14,8 +14,12 @@ from ai_email_writer.generator import (
     generate_professional_email,
     build_fallback_email,
     LLMUnavailableError,
+    IncompleteEmailError,
 )
+from ai_email_writer.recipient import infer_recipient_name
+from ai_email_writer.validator import email_validator
 from config_loader import get_email_config
+
 from .date_utils import get_lookback_date
 from .storage import load_email_storage
 from .sender import send_email
@@ -172,6 +176,12 @@ def run_email_batch_stream(
                 general_body=body,
                 system_prompt=system_prompt,
             )
+            # Rigorous completeness check on the generated body
+            recipient_name = infer_recipient_name(email)
+            val_report = email_validator.validate(gen_res.body, recipient_name=recipient_name)
+            if not val_report.is_valid:
+                raise IncompleteEmailError(f"Completeness defects: {'; '.join(val_report.issues)}")
+
             final_body = gen_res.body
             if gen_res.subject:
                 final_subject = gen_res.subject
@@ -181,6 +191,25 @@ def run_email_batch_stream(
                 "event": "llm_success",
                 "email": email,
                 "used_llm": True,
+                "subject": final_subject,
+                "body": final_body,
+            }
+
+        except IncompleteEmailError as inc_err:
+            llm_error_msg = str(inc_err)
+            fallback_res = build_fallback_email(
+                recipient_email=email,
+                general_subject=subject,
+                general_body=body,
+            )
+            final_body = fallback_res.body
+            final_subject = fallback_res.subject or subject
+
+            yield {
+                "event": "llm_incomplete_fallback",
+                "email": email,
+                "used_llm": False,
+                "reason": f"Incomplete AI generation detected ({inc_err}). Switched to safe generic fallback.",
                 "subject": final_subject,
                 "body": final_body,
             }
@@ -215,10 +244,10 @@ def run_email_batch_stream(
             final_subject = fallback_res.subject or subject
 
             yield {
-                "event": "llm_unavailable",
+                "event": "llm_incomplete_fallback",
                 "email": email,
                 "used_llm": False,
-                "reason": f"AI generation encountered an issue ({gen_err}). Switching to the generic body.",
+                "reason": f"AI generation encountered an issue ({gen_err}). Switched to safe generic fallback.",
                 "subject": final_subject,
                 "body": final_body,
             }

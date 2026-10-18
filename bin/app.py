@@ -493,7 +493,9 @@ with tab_chat:
             with stream_container:
                 st.markdown("### 📡 Live Outreach Streaming Progress")
                 progress_bar = st.progress(0.0)
-                status_area = st.empty()
+                metrics_placeholder = st.empty()
+                active_card_placeholder = st.empty()
+                log_table_placeholder = st.empty()
 
                 # Get custom system prompt if set
                 custom_sys_prompt = model_cfg.get("system_prompt", "")
@@ -511,7 +513,47 @@ with tab_chat:
                         system_prompt=custom_sys_prompt,
                     )
 
-                    current_email_card = None
+                    curr_state = {}
+                    processed_log = []
+                    sent_total = 0
+                    failed_total = 0
+
+                    def _render_active_card(placeholder, s):
+                        if not s:
+                            return
+                        with placeholder.container():
+                            st.markdown("---")
+                            st.markdown(f"#### 🔄 [{s['index']}/{s['total']}] Processing email: `{s['email']}`")
+                            st.markdown(f"**From**: `{s['sender']}` ➡️ **To**: `{s['email']}` | **Subject**: *'{s['subject']}'*")
+                            
+                            with st.expander("📄 This is the generic body", expanded=False):
+                                st.text(s["gen_body"])
+
+                            mode = s.get("mode")
+                            if mode == "llm_success":
+                                st.success(f"🤖 **Personalized by AI for recipient!** Subject: *'{s['subject']}'*")
+                                with st.expander("📄 This is the personalized body", expanded=True):
+                                    st.text(s["ai_body"])
+                            elif mode == "llm_unavailable":
+                                reason = s.get("reason", "No LLM detected")
+                                st.warning(f"⚠️ **Oops, sorry! No LLM detected.** ({reason})\n\nSwitching to the generic body...")
+                                with st.expander("📄 This is the body (Fallback)", expanded=True):
+                                    st.text(s["ai_body"])
+                            elif mode == "llm_incomplete_fallback":
+                                reason = s.get("reason", "Incomplete email detected")
+                                st.warning(f"⚠️ **Incomplete / Defective email detected.** ({reason})\n\nApplying robust fallback: Switching to generic body with personalized salutation & closing.")
+                                with st.expander("📄 This is the generic body (Fallback Applied)", expanded=True):
+                                    st.text(s["ai_body"])
+
+                            status = s.get("status")
+                            if status == "sending":
+                                st.caption(f"📤 Sending email to `{s['email']}`...")
+                            elif status == "sent":
+                                st.success(f"✅ **Email sent successfully to `{s['email']}`!**")
+                                st.write(f"⏳ **Remaining email(s) left:** `{s.get('remaining', 0)}`")
+                            elif status and status.startswith("failed"):
+                                st.error(f"❌ **Failed to send email to `{s['email']}` ({status}).**")
+                                st.write(f"⏳ **Remaining email(s) left:** `{s.get('remaining', 0)}`")
 
                     for event in stream_generator:
                         ev_type = event.get("event")
@@ -542,33 +584,47 @@ with tab_chat:
                             gen_subj = event["generic_subject"]
                             s_from = event["sender_email"]
 
-                            st.markdown(f"---")
-                            st.markdown(f"#### 🔄 [{idx}/{tot}] Processing email: `{e_target}`")
-                            st.markdown(f"**From**: `{s_from}` ➡️ **To**: `{e_target}` | **Subject**: *'{gen_subj}'*")
-                            
-                            with st.expander("📄 This is the generic body", expanded=False):
-                                st.text(gen_body)
+                            curr_state = {
+                                "index": idx,
+                                "total": tot,
+                                "email": e_target,
+                                "sender": s_from,
+                                "subject": gen_subj,
+                                "gen_body": gen_body,
+                                "ai_body": None,
+                                "mode": None,
+                                "reason": None,
+                                "status": "generating",
+                                "remaining": tot - idx,
+                            }
+                            _render_active_card(active_card_placeholder, curr_state)
 
                         # 3) LLM Success
                         elif ev_type == "llm_success":
-                            ai_subj = event["subject"]
-                            ai_body = event["body"]
-                            st.success(f"🤖 **Personalized by AI for recipient!** Subject: *'{ai_subj}'*")
-                            with st.expander("📄 This is the personalized body", expanded=True):
-                                st.text(ai_body)
+                            curr_state["subject"] = event["subject"]
+                            curr_state["ai_body"] = event["body"]
+                            curr_state["mode"] = "llm_success"
+                            _render_active_card(active_card_placeholder, curr_state)
 
                         # 4) Oops no LLM detected / Fallback
                         elif ev_type == "llm_unavailable":
-                            fb_body = event["body"]
-                            fb_subj = event["subject"]
-                            reason = event.get("reason", "No LLM detected")
-                            st.warning(f"⚠️ **Oops, sorry! No LLM detected.** ({reason})\n\nSwitching to the generic body...")
-                            with st.expander("📄 This is the body (Fallback)", expanded=True):
-                                st.text(fb_body)
+                            curr_state["subject"] = event["subject"]
+                            curr_state["ai_body"] = event["body"]
+                            curr_state["mode"] = "llm_unavailable"
+                            curr_state["reason"] = event.get("reason", "No LLM detected")
+                            _render_active_card(active_card_placeholder, curr_state)
+
+                        elif ev_type == "llm_incomplete_fallback":
+                            curr_state["subject"] = event["subject"]
+                            curr_state["ai_body"] = event["body"]
+                            curr_state["mode"] = "llm_incomplete_fallback"
+                            curr_state["reason"] = event.get("reason", "Incomplete email detected")
+                            _render_active_card(active_card_placeholder, curr_state)
 
                         # 5) Sending
                         elif ev_type == "sending":
-                            st.caption(f"📤 Sending email to `{event['email']}`...")
+                            curr_state["status"] = "sending"
+                            _render_active_card(active_card_placeholder, curr_state)
 
                         # 6) Email Complete
                         elif ev_type == "email_complete":
@@ -580,13 +636,34 @@ with tab_chat:
                             target_e = event["email"]
 
                             progress_bar.progress(idx / tot)
-
                             if is_succ:
-                                st.success(f"✅ **Email sent successfully to `{target_e}`!**")
+                                sent_total += 1
+                                curr_state["status"] = "sent"
                             else:
-                                st.error(f"❌ **Failed to send email to `{target_e}` ({status}).**")
+                                failed_total += 1
+                                curr_state["status"] = f"failed: {status}"
 
-                            st.write(f"⏳ **Remaining email(s) left:** `{rem_left}`")
+                            curr_state["remaining"] = rem_left
+                            _render_active_card(active_card_placeholder, curr_state)
+
+                            # Record in live audit log
+                            mode_label = "🤖 AI Personalized" if curr_state.get("mode") == "llm_success" else "📄 Generic Fallback"
+                            processed_log.append({
+                                "#": idx,
+                                "Recipient Email": target_e,
+                                "Subject": curr_state.get("subject", subject_line),
+                                "Status": "✅ Sent" if is_succ else f"❌ {status}",
+                                "Mode": mode_label,
+                            })
+
+                            # Update metrics row
+                            metrics_placeholder.markdown(
+                                f"**Processed:** `{idx}/{tot}` | **Sent:** `{sent_total}` | **Failed:** `{failed_total}` | **Remaining:** `{rem_left}`"
+                            )
+
+                            # Update live audit log table (scrollable dataframe)
+                            log_df = pd.DataFrame(processed_log)
+                            log_table_placeholder.dataframe(log_df, use_container_width=True, height=220)
 
                         # 7) Batch Complete
                         elif ev_type == "batch_complete":

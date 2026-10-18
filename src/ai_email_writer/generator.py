@@ -22,12 +22,18 @@ from .schemas import EmailResponse
 from .prompts import get_active_system_prompt
 from .recipient import infer_recipient_name
 from .formatter import format_email_body, enforce_correct_greeting
-
+from .validator import email_validator, ValidationReport
 
 
 class LLMUnavailableError(Exception):
     """Raised when Ollama server is offline or unreachable."""
     pass
+
+
+class IncompleteEmailError(Exception):
+    """Raised when generated email is incomplete or fails quality validation."""
+    pass
+
 
 
 def is_invalid_email(body_text: str) -> bool:
@@ -162,7 +168,7 @@ Return ONLY JSON with 'subject' and 'body'.
             last_error = "The model copied profile info or returned an overly long response."
             continue
 
-        # Format greeting and clean bullet spacing
+        # Format greeting, spacing, and ensure signature
         formatted_body = format_email_body(
             body_text=result.body,
             recipient_name=recipient_name,
@@ -170,15 +176,21 @@ Return ONLY JSON with 'subject' and 'body'.
 
         final_subject = result.subject.strip() if (result.subject and result.subject.strip()) else general_subject
 
+        # Validate completeness with email_validator
+        val_report = email_validator.validate(formatted_body, recipient_name=recipient_name)
+        if not val_report.is_valid:
+            last_error = f"Incomplete email defects: {'; '.join(val_report.issues)}"
+            if attempt == 0:
+                current_prompt += f"\n\n{val_report.feedback}"
+            continue
+
         return EmailResponse(
             subject=final_subject,
             body=formatted_body,
         )
 
-    # If retry attempts exhausted without returning, raise
-    raise ValueError(
-        f"Could not generate a valid email after attempts. Last issue: {last_error}"
-    )
+    # If retry attempts exhausted without producing a complete email, raise IncompleteEmailError
+    raise IncompleteEmailError(f"AI generated an incomplete email ({last_error}).")
 
 
 def build_fallback_email(
@@ -188,13 +200,13 @@ def build_fallback_email(
 ) -> EmailResponse:
     """
     Builds the formatted fallback email using the static/generic body
-    with correct recipient greeting and \\n\\n line breaks.
+    with correct recipient greeting, complete closing, and double newline paragraph breaks.
     """
     recipient_name = infer_recipient_name(recipient_email)
-    formatted = enforce_correct_greeting(general_body, recipient_name)
-    # Ensure double newlines for paragraph spacing
+    formatted = format_email_body(general_body, recipient_name)
     normalized = formatted.replace("\r\n", "\n")
     return EmailResponse(
         subject=general_subject,
         body=normalized,
     )
+

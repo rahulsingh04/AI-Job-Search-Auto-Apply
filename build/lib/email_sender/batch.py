@@ -1,9 +1,25 @@
+"""
+Batch Email Sending Pipeline with Streaming Event Generation
+============================================================
+Checks history, generates personalized body (with graceful LLM fallback),
+dispatches emails, and yields streaming progress updates.
+"""
+
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import Generator, Dict, Any, List, Optional
 
-from ai_email_writer.generator import generate_professional_email
+from ai_email_writer.generator import (
+    generate_professional_email,
+    build_fallback_email,
+    LLMUnavailableError,
+    IncompleteEmailError,
+)
+from ai_email_writer.recipient import infer_recipient_name
+from ai_email_writer.validator import email_validator
 from config_loader import get_email_config
+
 from .date_utils import get_lookback_date
 from .storage import load_email_storage
 from .sender import send_email
@@ -24,7 +40,6 @@ def was_recently_emailed(
     look_back_format: str = LOOK_BACK_FORMAT,
 ) -> bool:
     """Check email history before invoking the LLM."""
-
     email_data = load_email_storage()
 
     normalized_data = {
@@ -32,29 +47,20 @@ def was_recently_emailed(
         for email, sent_date in email_data.items()
     }
 
-    last_sent = normalized_data.get(
-        recipient_email.strip().lower()
-    )
-
-    if last_sent is None:
+    last_sent = normalized_data.get(recipient_email.strip().lower())
+    if last_sent is None or not last_sent.strip() or last_sent.lower() == "never":
         return False
 
     try:
-        last_sent_date = datetime.strptime(
-            last_sent, "%Y-%m-%d"
-        ).date()
-    except (ValueError, TypeError) as exc:
-        raise ValueError(
-            f"Invalid stored date for {recipient_email}: {last_sent!r}"
-        ) from exc
+        last_sent_date = datetime.strptime(last_sent.strip(), "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return False
 
-    return last_sent_date >= get_lookback_date(
-        look_back, look_back_format
-    )
+    return last_sent_date >= get_lookback_date(look_back, look_back_format)
 
 
-def run_email_batch(
-    list_of_emails: list[str],
+def run_email_batch_stream(
+    list_of_emails: List[str],
     subject: str,
     body: str,
     sender_email: str,
@@ -62,151 +68,271 @@ def run_email_batch(
     attachments=None,
     look_back: int = LOOK_BACK,
     look_back_format: str = LOOK_BACK_FORMAT,
-) -> list[dict]:
+    system_prompt: Optional[str] = None,
+) -> Generator[Dict[str, Any], None, List[Dict[str, Any]]]:
     """
-    Check history -> generate personalized body -> send email.
-
-    The subject remains fixed. Recently contacted recipients
-    are skipped before any LLM call.
+    Streaming generator for batch outreach:
+    Yields event dicts at each step for live frontend rendering.
     """
-
     if not list_of_emails:
         raise ValueError("Recipient list cannot be empty.")
-
     if not subject or not subject.strip():
         raise ValueError("Subject cannot be empty.")
-
     if not body or not body.strip():
         raise ValueError("Email body cannot be empty.")
 
-    # Validate attachments before processing recipients.
+    # Validate attachment if present
     if attachments is not None:
-        paths = (
-            [attachments]
-            if isinstance(attachments, (str, Path))
-            else attachments
-        )
-
+        paths = [attachments] if isinstance(attachments, (str, Path)) else attachments
         for item in paths:
             path = Path(item).expanduser()
-
             if not path.is_file():
-                raise FileNotFoundError(
-                    f"Attachment not found: {path}"
-                )
-
+                raise FileNotFoundError(f"Attachment not found: {path}")
             if path.suffix.lower() != ".pdf":
-                raise ValueError(
-                    f"Only PDF files are supported: {path}"
-                )
+                raise ValueError(f"Only PDF files are supported: {path}")
 
-    results = []
+    # Deduplicate and validate input list
     unique_emails = []
     seen_emails = set()
+    invalid_emails = []
 
-    # Validate and deduplicate the input list.
     for item in list_of_emails:
-        if not isinstance(item, str):
-            results.append({
-                "email": str(item),
-                "status": "invalid_email",
-            })
-            continue
-
-        email = item.strip()
-
+        email = str(item).strip()
         if not EMAIL_PATTERN.fullmatch(email):
-            results.append({
-                "email": email,
-                "status": "invalid_email",
-            })
+            invalid_emails.append(email)
             continue
-
         key = email.lower()
+        if key not in seen_emails:
+            seen_emails.add(key)
+            unique_emails.append(email)
 
-        if key in seen_emails:
-            results.append({
-                "email": email,
-                "status": "duplicate_in_input",
-            })
-            continue
+    # Calculate lookback counts
+    already_contacted = []
+    to_process = []
 
-        seen_emails.add(key)
-        unique_emails.append(email)
+    for email in unique_emails:
+        if was_recently_emailed(email, look_back, look_back_format):
+            already_contacted.append(email)
+        else:
+            to_process.append(email)
 
-    total = len(unique_emails)
+    total_in_db = len(list_of_emails)
+    already_sent_count = len(already_contacted)
+    remaining_count = len(to_process)
 
-    for index, email in enumerate(unique_emails, start=1):
-        print(f"\n[{index}/{total}] Processing: {email}")
+    # 1. Yield initialization overview
+    yield {
+        "event": "init",
+        "total_emails_in_db": total_in_db,
+        "already_sent_count": already_sent_count,
+        "look_back": look_back,
+        "look_back_format": look_back_format,
+        "remaining_to_send": remaining_count,
+    }
+
+    results = []
+
+    # Record skipped already-contacted
+    for skipped_email in already_contacted:
+        results.append({
+            "email": skipped_email,
+            "status": "skipped_recently_contacted",
+        })
+
+    # Record invalid
+    for inv in invalid_emails:
+        results.append({
+            "email": inv,
+            "status": "invalid_email",
+        })
+
+    # Process remaining emails
+    total_to_send = len(to_process)
+
+    for index, email in enumerate(to_process, start=1):
+        remaining_left = total_to_send - index
+
+        # 2. Yield processing start
+        yield {
+            "event": "email_start",
+            "index": index,
+            "total": total_to_send,
+            "email": email,
+            "sender_email": sender_email,
+            "generic_subject": subject,
+            "generic_body": body,
+        }
+
+        # 3. Attempt generation with LLM or fallback
+        final_subject = subject
+        final_body = body
+        used_llm = False
+        llm_error_msg = None
 
         try:
-            # 1. Check history BEFORE calling the LLM.
-            if was_recently_emailed(
-                email, look_back, look_back_format
-            ):
-                print("Skipped: recently contacted.")
+            gen_res = generate_professional_email(
+                recipient_email=email,
+                general_subject=subject,
+                general_body=body,
+                system_prompt=system_prompt,
+            )
+            # Rigorous completeness check on the generated body
+            recipient_name = infer_recipient_name(email)
+            val_report = email_validator.validate(gen_res.body, recipient_name=recipient_name)
+            if not val_report.is_valid:
+                raise IncompleteEmailError(f"Completeness defects: {'; '.join(val_report.issues)}")
 
-                results.append({
-                    "email": email,
-                    "status": "skipped_recently_contacted",
-                })
-                continue
+            final_body = gen_res.body
+            if gen_res.subject:
+                final_subject = gen_res.subject
+            used_llm = True
 
-            # 2. Generate the personalized email body.
-            result = generate_professional_email(
+            yield {
+                "event": "llm_success",
+                "email": email,
+                "used_llm": True,
+                "subject": final_subject,
+                "body": final_body,
+            }
+
+        except IncompleteEmailError as inc_err:
+            llm_error_msg = str(inc_err)
+            fallback_res = build_fallback_email(
                 recipient_email=email,
                 general_subject=subject,
                 general_body=body,
             )
+            final_body = fallback_res.body
+            final_subject = fallback_res.subject or subject
 
-            if not result.body.strip():
-                raise ValueError("Generated email body is empty.")
+            yield {
+                "event": "llm_incomplete_fallback",
+                "email": email,
+                "used_llm": False,
+                "reason": f"Incomplete AI generation detected ({inc_err}). Switched to safe generic fallback.",
+                "subject": final_subject,
+                "body": final_body,
+            }
 
-            # 3. Send the email with the fixed subject.
+        except LLMUnavailableError as l_err:
+            llm_error_msg = str(l_err)
+            fallback_res = build_fallback_email(
+                recipient_email=email,
+                general_subject=subject,
+                general_body=body,
+            )
+            final_body = fallback_res.body
+            final_subject = fallback_res.subject or subject
+
+            yield {
+                "event": "llm_unavailable",
+                "email": email,
+                "used_llm": False,
+                "reason": "Oops, sorry! No LLM detected (Ollama is offline or unreachable). Switching to the generic body.",
+                "subject": final_subject,
+                "body": final_body,
+            }
+
+        except Exception as gen_err:
+            llm_error_msg = str(gen_err)
+            fallback_res = build_fallback_email(
+                recipient_email=email,
+                general_subject=subject,
+                general_body=body,
+            )
+            final_body = fallback_res.body
+            final_subject = fallback_res.subject or subject
+
+            yield {
+                "event": "llm_incomplete_fallback",
+                "email": email,
+                "used_llm": False,
+                "reason": f"AI generation encountered an issue ({gen_err}). Switched to safe generic fallback.",
+                "subject": final_subject,
+                "body": final_body,
+            }
+
+        # 4. Dispatch Email via SMTP
+        yield {
+            "event": "sending",
+            "email": email,
+            "sender": sender_email,
+            "subject": final_subject,
+            "body": final_body,
+        }
+
+        try:
             success = send_email(
                 recipient_email=email,
-                subject=subject,
-                body=result.body,
+                subject=final_subject,
+                body=final_body,
                 sender_email=sender_email,
                 sender_password=sender_password,
                 attachments=attachments,
                 look_back=look_back,
                 look_back_format=look_back_format,
             )
+            status = "sent_ai" if (success and used_llm) else ("sent_fallback" if success else "failed")
+        except Exception as send_err:
+            success = False
+            status = "error"
+            llm_error_msg = str(send_err)
 
-            status = "sent" if success else "failed"
+        results.append({
+            "email": email,
+            "status": status,
+            "subject": final_subject,
+            "used_llm": used_llm,
+        })
 
-            results.append({
-                "email": email,
-                "status": status,
-            })
+        # 5. Yield email completion status with remaining count
+        yield {
+            "event": "email_complete",
+            "index": index,
+            "total": total_to_send,
+            "email": email,
+            "status": status,
+            "success": success,
+            "remaining_emails_left": remaining_left,
+        }
 
-            print(f"Result: {status}")
-
-        except Exception as exc:
-            print(f"Error for {email}: {exc}")
-
-            results.append({
-                "email": email,
-                "status": "error",
-                "error": str(exc),
-            })
-
-    print("\n========== BATCH SUMMARY ==========")
-
-    for status in (
-        "sent",
-        "skipped_recently_contacted",
-        "duplicate_in_input",
-        "invalid_email",
-        "failed",
-        "error",
-    ):
-        count = sum(
-            item["status"] == status
-            for item in results
-        )
-        print(f"{status}: {count}")
+    # 6. Yield final batch complete
+    yield {
+        "event": "batch_complete",
+        "results": results,
+        "sent_count": sum(1 for r in results if "sent" in r.get("status", "")),
+        "skipped_count": already_sent_count,
+        "failed_count": sum(1 for r in results if r.get("status") in ("failed", "error")),
+    }
 
     return results
 
+
+def run_email_batch(
+    list_of_emails: List[str],
+    subject: str,
+    body: str,
+    sender_email: str,
+    sender_password: str,
+    attachments=None,
+    look_back: int = LOOK_BACK,
+    look_back_format: str = LOOK_BACK_FORMAT,
+    system_prompt: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Non-streaming wrapper for run_email_batch_stream (used by CLI and tests)."""
+    stream = run_email_batch_stream(
+        list_of_emails=list_of_emails,
+        subject=subject,
+        body=body,
+        sender_email=sender_email,
+        sender_password=sender_password,
+        attachments=attachments,
+        look_back=look_back,
+        look_back_format=look_back_format,
+        system_prompt=system_prompt,
+    )
+    final_results = []
+    for event in stream:
+        if event.get("event") == "batch_complete":
+            final_results = event.get("results", [])
+    return final_results

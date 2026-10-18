@@ -90,17 +90,33 @@ def format_numbered_skills(body_text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def ensure_complete_closing(body_text: str, candidate_name: str = "Rahul Singh") -> str:
+    """
+    Ensure the email ends with a proper polite closing and candidate signature if missing.
+    """
+    text = body_text.strip()
+    closing_patterns = [
+        r"(?:best\s+regards|warm\s+regards|regards|sincerely|kind\s+regards|best|warmly)",
+    ]
+    has_closing = any(re.search(pat, text, flags=re.IGNORECASE) for pat in closing_patterns)
+    has_signature = any(re.search(pat, text, flags=re.IGNORECASE) for pat in [r"rahul\s+kumar\s+singh", r"rahul\s+singh", r"rahul"])
+
+    if not has_closing and not has_signature:
+        return f"{text}\n\nBest regards,\n{candidate_name}"
+    elif has_closing and not has_signature:
+        return f"{text}\n{candidate_name}"
+    return text
+
+
 def format_email_body(
     body_text: str,
-    recipient_name: str | None
+    recipient_name: str | None,
+    candidate_name: str = "Rahul Singh"
 ) -> str:
     """
-    Apply skill formatting first, then add the correct greeting.
+    Apply skill formatting first, add greeting, and ensure complete closing.
     """
-
     text = format_numbered_skills(body_text)
+    text = enforce_correct_greeting(text, recipient_name)
+    return ensure_complete_closing(text, candidate_name)
 
-    return enforce_correct_greeting(
-        text,
-        recipient_name
-    )
