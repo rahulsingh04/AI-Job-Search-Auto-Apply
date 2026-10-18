@@ -32,3 +32,12 @@ email_storage_file*
 
 # Python cache directories
 __pycache__/
+
+# PDF and Microsoft Word documents
+*.pdf
+*.doc
+*.docx
+*.docm
+*.dot
+*.dotx
+*.dotm
