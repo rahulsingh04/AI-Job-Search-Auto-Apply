@@ -19,20 +19,24 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STORAGE_DIR = PROJECT_ROOT
 DEFAULT_STORAGE_FILE = (
-    PROJECT_ROOT / "Email_Storage.txt"
-    if (PROJECT_ROOT / "Email_Storage.txt").is_file()
-    else PROJECT_ROOT / "Email_Storage.json"
+    PROJECT_ROOT / "Email_Storage.json"
+    if (PROJECT_ROOT / "Email_Storage.json").is_file()
+    else (
+        PROJECT_ROOT / "Email_Storage.txt"
+        if (PROJECT_ROOT / "Email_Storage.txt").is_file()
+        else PROJECT_ROOT / "Email_Storage.json"
+    )
 )
 
 
 def resolve_database_path(custom_path: str | Path | None = None) -> Path:
     """
     Resolve a database file path:
-    - If None or empty, returns DEFAULT_STORAGE_FILE.
+    - If None, empty, or a package dependencies file (e.g. requirements.txt), returns DEFAULT_STORAGE_FILE.
     - If absolute, returns that absolute Path.
     - If relative, first checks PROJECT_ROOT / path, then cwd / path.
     """
-    if not custom_path:
+    if not custom_path or "requirements.txt" in str(custom_path).lower():
         return DEFAULT_STORAGE_FILE
     p = Path(custom_path).expanduser()
     if p.is_absolute():

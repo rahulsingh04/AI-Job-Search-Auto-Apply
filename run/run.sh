@@ -262,12 +262,25 @@ fi
 echo ""
 
 # ------------------------------------------------------------------------------
-# STEP 3: Install Package & Dependencies (pip install .)
+# STEP 3: Clear Caches & Install Dependencies via pyproject.toml
 # ------------------------------------------------------------------------------
-echo -e "${YELLOW}[STEP 3/4] Installing / Updating Dependencies via pip install . ...${NC}"
+echo -e "${YELLOW}[STEP 3/4] Clearing Caches & Installing Dependencies from pyproject.toml...${NC}"
+
+# Clear Python bytecode and temporary build/test caches
+echo -e "${CYAN}Purging Python bytecode and build caches...${NC}"
+find "$PROJECT_ROOT" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+find "$PROJECT_ROOT" -type f -name "*.py[cod]" -delete 2>/dev/null || true
+rm -rf "$PROJECT_ROOT/.pytest_cache" "$PROJECT_ROOT/build" "$PROJECT_ROOT/dist" "$PROJECT_ROOT"/*.egg-info "$PROJECT_ROOT/src"/*.egg-info 2>/dev/null || true
+
+# Purge pip cache
+echo -e "${CYAN}Purging pip cache...${NC}"
+"$ACTIVE_PY" -m pip cache purge 2>/dev/null || true
+
+# Install dependencies using pyproject.toml
+echo -e "${CYAN}Running: pip install . (configured via pyproject.toml)${NC}"
 "$ACTIVE_PY" -m pip install --upgrade pip --quiet
 "$ACTIVE_PY" -m pip install .
-echo -e "${GREEN}[OK] Dependencies successfully installed and verified from pyproject.toml.${NC}"
+echo -e "${GREEN}[OK] Caches cleared and dependencies successfully verified from pyproject.toml.${NC}"
 echo ""
 
 # ------------------------------------------------------------------------------

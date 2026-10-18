@@ -113,18 +113,34 @@ if "pending_delete_domain" not in st.session_state:
 if "last_ingested_text_cache" not in st.session_state:
     st.session_state.last_ingested_text_cache = ""
 
-if "user_loaded_db_path" not in st.session_state:
+# Robust session-state sanitization to purge any stale 'requirements.txt' references
+for _key in ["user_loaded_db_path", "active_db_path", "chat_db_loc_input", "chat_db_file_nav_picker"]:
+    _val = st.session_state.get(_key)
+    if _val is not None:
+        _val_str = getattr(_val, "name", str(_val)).lower()
+        if "requirements" in _val_str:
+            del st.session_state[_key]
+
+if (
+    "user_loaded_db_path" not in st.session_state
+    or not st.session_state.user_loaded_db_path
+    or "requirements" in str(st.session_state.user_loaded_db_path).lower()
+):
     st.session_state.user_loaded_db_path = str(DEFAULT_STORAGE_FILE) if DEFAULT_STORAGE_FILE.is_file() else None
 
-if "memory_database" not in st.session_state:
+if (
+    "active_db_path" not in st.session_state
+    or not st.session_state.active_db_path
+    or "requirements" in str(st.session_state.active_db_path).lower()
+):
+    st.session_state.active_db_path = str(DEFAULT_STORAGE_FILE)
+
+if "memory_database" not in st.session_state or not st.session_state.memory_database:
     if DEFAULT_STORAGE_FILE.is_file():
         parsed_db, _ = load_database_from_location(DEFAULT_STORAGE_FILE)
         st.session_state.memory_database = parsed_db
     else:
         st.session_state.memory_database = None
-
-if "active_db_path" not in st.session_state:
-    st.session_state.active_db_path = str(DEFAULT_STORAGE_FILE)
 
 
 
@@ -259,32 +275,49 @@ with tab_chat:
             db_loc_input = st.text_input(
                 "Location of Database File (.txt, .json, .csv, .xlsx):",
                 value=default_loc_text,
-                placeholder="e.g. Email_Storage.txt, Email_Storage.json, or full path",
+                placeholder="e.g. Email_Storage.json, Email_Storage.csv, or full path",
                 key="chat_db_loc_input",
                 help="Enter path or click 'Navigate & Choose File' below to browse."
             )
 
-            col_btn_nav, col_btn_load = st.columns([1, 1])
+            col_btn_nav, col_btn_load, col_btn_reset = st.columns([1, 1, 1])
 
             # 1. Button to navigate and choose file location using native file explorer dialog
             with col_btn_nav:
-                if st.button("🗂️ Navigate & Choose File", use_container_width=True, help="Open file explorer window to navigate and choose your database file"):
+                if st.button("🗂️ Browse File", use_container_width=True, help="Open file explorer window to navigate and choose your database file"):
                     chosen_file = open_database_file_dialog()
                     if chosen_file:
                         cand_path = Path(chosen_file).resolve()
                         if cand_path.is_file():
-                            st.session_state.user_loaded_db_path = str(cand_path)
-                            st.session_state.active_db_path = str(cand_path)
-                            parsed_db, load_msg = load_database_from_location(cand_path)
-                            st.session_state.memory_database = parsed_db
-                            st.success(f"✅ Selected `{cand_path.name}`! {load_msg} into memory.")
-                            st.rerun()
+                            if "requirements.txt" in cand_path.name.lower():
+                                st.error("❌ 'requirements.txt' is a Python package requirements file, NOT a recipient database. Please choose a valid email database (.json, .csv, .xlsx, .txt).")
+                            else:
+                                parsed_db, load_msg = load_database_from_location(cand_path)
+                                if not parsed_db:
+                                    st.warning(f"⚠️ No valid email addresses found in `{cand_path.name}`. Please choose a file containing recipient email addresses.")
+                                else:
+                                    st.session_state.user_loaded_db_path = str(cand_path)
+                                    st.session_state.active_db_path = str(cand_path)
+                                    st.session_state.memory_database = parsed_db
+                                    st.success(f"✅ Selected `{cand_path.name}`! {load_msg} into memory.")
+                                    st.rerun()
 
             # 2. Button to load directly from the typed/specified location into memory
             with col_btn_load:
-                load_btn_clicked = st.button("📂 Load from Location", type="primary", use_container_width=True, help="Load recipient emails from this location into memory")
+                load_btn_clicked = st.button("📂 Load Location", type="primary", use_container_width=True, help="Load recipient emails from this location into memory")
 
-            # 3. Browser-native file navigation chooser
+            # 3. Button to reset back to default Email_Storage.json
+            with col_btn_reset:
+                if st.button("🔄 Reset to Default DB", use_container_width=True, help="Reset back to default Email_Storage.json"):
+                    st.session_state.user_loaded_db_path = str(DEFAULT_STORAGE_FILE)
+                    st.session_state.active_db_path = str(DEFAULT_STORAGE_FILE)
+                    if DEFAULT_STORAGE_FILE.is_file():
+                        parsed_db, _ = load_database_from_location(DEFAULT_STORAGE_FILE)
+                        st.session_state.memory_database = parsed_db
+                    st.success(f"✅ Reset back to `{DEFAULT_STORAGE_FILE.name}`.")
+                    st.rerun()
+
+            # 4. Browser-native file navigation chooser
             uploaded_nav_file = st.file_uploader(
                 "Or navigate & choose file via browser:",
                 type=["txt", "json", "csv", "xlsx", "xls"],
@@ -293,27 +326,40 @@ with tab_chat:
             )
 
             if uploaded_nav_file is not None:
-                save_path = PROJECT_ROOT / uploaded_nav_file.name
-                with open(save_path, "wb") as f:
-                    f.write(uploaded_nav_file.getbuffer())
-                parsed_db, load_msg = load_database_from_location(save_path)
-                st.session_state.user_loaded_db_path = str(save_path)
-                st.session_state.active_db_path = str(save_path)
-                st.session_state.memory_database = parsed_db
-                st.success(f"✅ Chosen `{uploaded_nav_file.name}`! Loaded {len(parsed_db)} emails into memory.")
-
-            # Execute loading when "📂 Load from Location" is clicked
-            if load_btn_clicked:
-                cand_path = resolve_database_path(db_loc_input.strip() if db_loc_input else None)
-                if cand_path.is_file():
-                    parsed_db, load_msg = load_database_from_location(cand_path)
-                    st.session_state.memory_database = parsed_db
-                    st.session_state.user_loaded_db_path = str(cand_path)
-                    st.session_state.active_db_path = str(cand_path)
-                    st.success(f"✅ {load_msg}! Emails are now loaded into memory ready for sending.")
-                    st.rerun()
+                if "requirements.txt" in uploaded_nav_file.name.lower():
+                    st.error("❌ 'requirements.txt' is a Python package requirements file, NOT an email recipient database. Please choose a file containing recipient emails.")
                 else:
-                    st.error(f"❌ File not found at `{cand_path}`. Please verify the location path.")
+                    save_path = PROJECT_ROOT / uploaded_nav_file.name
+                    with open(save_path, "wb") as f:
+                        f.write(uploaded_nav_file.getbuffer())
+                    parsed_db, load_msg = load_database_from_location(save_path)
+                    if not parsed_db:
+                        st.warning(f"⚠️ No email addresses found in `{uploaded_nav_file.name}`. The file must contain valid recipient email addresses.")
+                    else:
+                        st.session_state.user_loaded_db_path = str(save_path)
+                        st.session_state.active_db_path = str(save_path)
+                        st.session_state.memory_database = parsed_db
+                        st.success(f"✅ Chosen `{uploaded_nav_file.name}`! Loaded {len(parsed_db)} emails into memory.")
+
+            # Execute loading when "📂 Load Location" is clicked
+            if load_btn_clicked:
+                clean_input = db_loc_input.strip() if db_loc_input else ""
+                if "requirements.txt" in clean_input.lower():
+                    st.error("❌ 'requirements.txt' is a Python package requirements file, NOT an email recipient database. Please specify a valid database file (.json, .csv, .xlsx, .txt).")
+                else:
+                    cand_path = resolve_database_path(clean_input if clean_input else None)
+                    if cand_path.is_file():
+                        parsed_db, load_msg = load_database_from_location(cand_path)
+                        if not parsed_db:
+                            st.warning(f"⚠️ No valid email addresses found in `{cand_path.name}`. Please specify a file with email contacts.")
+                        else:
+                            st.session_state.memory_database = parsed_db
+                            st.session_state.user_loaded_db_path = str(cand_path)
+                            st.session_state.active_db_path = str(cand_path)
+                            st.success(f"✅ {load_msg}! Emails are now loaded into memory ready for sending.")
+                            st.rerun()
+                    else:
+                        st.error(f"❌ File not found at `{cand_path}`. Please verify the location path.")
 
             # Display currently loaded state in memory
             if st.session_state.get("memory_database"):
@@ -328,10 +374,11 @@ with tab_chat:
                         st.code("\n".join(mem_db.keys()), language="text")
             elif st.session_state.user_loaded_db_path:
                 cand_path = resolve_database_path(st.session_state.user_loaded_db_path)
-                if cand_path.is_file():
+                if cand_path.is_file() and "requirements.txt" not in cand_path.name.lower():
                     parsed_db, _ = load_database_from_location(cand_path)
-                    st.session_state.memory_database = parsed_db
-                    st.caption(f"🧠 **In-Memory Ready:** `{cand_path.name}` ({len(parsed_db)} emails loaded)")
+                    if parsed_db:
+                        st.session_state.memory_database = parsed_db
+                        st.caption(f"🧠 **In-Memory Ready:** `{cand_path.name}` ({len(parsed_db)} emails loaded)")
             else:
                 st.caption("ℹ️ Click **'🗂️ Navigate & Choose File'** or **'📂 Load from Location'** to load recipient emails into memory.")
 
@@ -428,23 +475,67 @@ with tab_chat:
     if user_body_input != st.session_state.generic_body:
         st.session_state.generic_body = user_body_input
 
-    # Preview & Target Selection Logic (Requirement 2 & In-Memory Loading)
-    # Step 1: In-memory loaded database from location
-    if st.session_state.get("memory_database"):
-        current_target_emails = list(st.session_state.memory_database.keys())
-        loaded_name = Path(st.session_state.user_loaded_db_path).name if st.session_state.user_loaded_db_path else "location"
-        target_mode_desc = f"in-memory database loaded from `{loaded_name}`"
+    # Preview & Target Selection Logic (Fully Dynamic & Frontend-Controlled)
+    db_contacts = {}
+    db_source_name = ""
+
+    # 1. Check in-memory database
+    if st.session_state.get("memory_database") and len(st.session_state.memory_database) > 0:
+        db_contacts = st.session_state.memory_database
+        user_p = st.session_state.get("user_loaded_db_path")
+        if user_p and "requirements" not in str(user_p).lower():
+            db_source_name = Path(user_p).name
+        else:
+            db_source_name = DEFAULT_STORAGE_FILE.name
     elif st.session_state.get("user_loaded_db_path") and Path(st.session_state.user_loaded_db_path).is_file():
-        loaded_target_path = resolve_database_path(st.session_state.user_loaded_db_path)
-        loaded_db_data, _ = load_database_from_location(loaded_target_path)
-        st.session_state.memory_database = loaded_db_data
-        current_target_emails = list(loaded_db_data.keys())
-        target_mode_desc = f"loaded database `{loaded_target_path.name}`"
-    else:
-        # Step 2: Fall back to checking the Add emails paste job description section
-        cached_pasted = quick_script_input.strip() if quick_script_input else st.session_state.get("last_ingested_text_cache", "")
-        current_target_emails = sorted(list(set(extract_emails_from_text(cached_pasted))))
+        cand_path = resolve_database_path(st.session_state.user_loaded_db_path)
+        if "requirements" not in cand_path.name.lower():
+            loaded_data, _ = load_database_from_location(cand_path)
+            if loaded_data:
+                db_contacts = loaded_data
+                db_source_name = cand_path.name
+
+    # 2. Fallback to default Email_Storage.json if custom selection has 0 emails
+    if not db_contacts and DEFAULT_STORAGE_FILE.is_file():
+        default_data, _ = load_database_from_location(DEFAULT_STORAGE_FILE)
+        if default_data:
+            db_contacts = default_data
+            db_source_name = DEFAULT_STORAGE_FILE.name
+            st.session_state.memory_database = default_data
+            st.session_state.user_loaded_db_path = str(DEFAULT_STORAGE_FILE)
+
+    # 3. Check pasted script / job description text box
+    cached_pasted = quick_script_input.strip() if quick_script_input else st.session_state.get("last_ingested_text_cache", "")
+    pasted_contacts = sorted(list(set(extract_emails_from_text(cached_pasted)))) if cached_pasted else []
+
+    # Dynamic source selector in the frontend
+    if db_contacts and pasted_contacts:
+        col_src, _ = st.columns([2, 1])
+        with col_src:
+            chosen_source = st.radio(
+                "🎯 Target Recipient Source:",
+                [
+                    f"Database: {db_source_name} ({len(db_contacts)} emails)",
+                    f"Pasted Text ({len(pasted_contacts)} emails)",
+                ],
+                horizontal=True,
+                key="chat_target_source_radio"
+            )
+        if "Database" in chosen_source:
+            current_target_emails = list(db_contacts.keys())
+            target_mode_desc = f"database `{db_source_name}`"
+        else:
+            current_target_emails = pasted_contacts
+            target_mode_desc = "pasted job description / email section"
+    elif db_contacts:
+        current_target_emails = list(db_contacts.keys())
+        target_mode_desc = f"database `{db_source_name}`"
+    elif pasted_contacts:
+        current_target_emails = pasted_contacts
         target_mode_desc = "pasted job description / email section"
+    else:
+        current_target_emails = []
+        target_mode_desc = "no recipient emails found"
 
     total_recipients = len(current_target_emails)
 
@@ -457,20 +548,8 @@ with tab_chat:
 
     # 4. Streaming Execution when "Send Automatic Email" is clicked
     if send_btn:
-        # Priority 1: In-memory loaded database from location
-        if st.session_state.get("memory_database"):
-            recipients_list = list(st.session_state.memory_database.keys())
-            loaded_name = Path(st.session_state.user_loaded_db_path).name if st.session_state.user_loaded_db_path else "memory"
-            send_source_label = f"In-Memory Database ({loaded_name})"
-        elif st.session_state.get("user_loaded_db_path") and Path(st.session_state.user_loaded_db_path).is_file():
-            loaded_db_data, _ = load_database_from_location(st.session_state.user_loaded_db_path)
-            recipients_list = list(loaded_db_data.keys())
-            send_source_label = f"Loaded Database ({Path(st.session_state.user_loaded_db_path).name})"
-        else:
-            # Priority 2: Fallback to Add emails / paste job description section
-            cached_pasted = quick_script_input.strip() if quick_script_input else st.session_state.get("last_ingested_text_cache", "")
-            recipients_list = sorted(list(set(extract_emails_from_text(cached_pasted))))
-            send_source_label = "Pasted Job Description / Emails"
+        recipients_list = current_target_emails
+        send_source_label = target_mode_desc
 
         if not sender_email or not sender_password:
             st.error("Please provide both your **Gmail Address** and **App Password** in the sidebar.")
@@ -479,10 +558,7 @@ with tab_chat:
         elif not st.session_state.uploaded_resume_path or not Path(st.session_state.uploaded_resume_path).is_file():
             st.error("Please attach a valid resume PDF file.")
         elif not recipients_list:
-            if st.session_state.get("user_loaded_db_path"):
-                st.error(f"No recipient emails found in loaded database `{Path(st.session_state.user_loaded_db_path).name}`.")
-            else:
-                st.error("No recipient emails found! Please load a database file from location or paste job descriptions / emails in the box above.")
+            st.error("No recipient emails found! Please paste emails in the box above or load a valid database file (.json, .csv, .xlsx, .txt).")
         else:
             st.session_state.chat_messages.append({
                 "role": "user",
@@ -739,19 +815,34 @@ with tab_prompt_inspect:
     # 3. Sender and Receiver Email Only (Requirement 3: then it should show the email of the sender and receiver only)
     st.markdown("#### 📬 Sender & Receiver Email Details")
 
-    # Determine current receivers (from in-memory loaded db or fallback to pasted job description)
-    if st.session_state.get("memory_database"):
+    # Determine current receivers (from in-memory loaded db, or fallback to pasted job description, or default Email_Storage.json)
+    current_rec_list = []
+    rec_source_tag = "no recipients loaded yet"
+
+    if st.session_state.get("memory_database") and len(st.session_state.memory_database) > 0:
         current_rec_list = list(st.session_state.memory_database.keys())
-        loaded_name = Path(st.session_state.user_loaded_db_path).name if st.session_state.user_loaded_db_path else "memory"
+        user_p = st.session_state.get("user_loaded_db_path")
+        loaded_name = Path(user_p).name if user_p and "requirements" not in str(user_p).lower() else DEFAULT_STORAGE_FILE.name
         rec_source_tag = f"from in-memory database `{loaded_name}`"
     elif st.session_state.get("user_loaded_db_path") and Path(st.session_state.user_loaded_db_path).is_file():
-        rec_db, _ = load_database_from_location(st.session_state.user_loaded_db_path)
-        current_rec_list = list(rec_db.keys())
-        rec_source_tag = f"from loaded database `{Path(st.session_state.user_loaded_db_path).name}`"
-    else:
+        cand_p = resolve_database_path(st.session_state.user_loaded_db_path)
+        if "requirements" not in cand_p.name.lower():
+            rec_db, _ = load_database_from_location(cand_p)
+            if rec_db:
+                current_rec_list = list(rec_db.keys())
+                rec_source_tag = f"from loaded database `{cand_p.name}`"
+
+    if not current_rec_list:
         cached_p = st.session_state.get("last_ingested_text_cache", "")
-        current_rec_list = sorted(list(set(extract_emails_from_text(cached_p))))
-        rec_source_tag = "from pasted job description / email section" if current_rec_list else "no recipients loaded yet"
+        extracted_p = sorted(list(set(extract_emails_from_text(cached_p)))) if cached_p else []
+        if extracted_p:
+            current_rec_list = extracted_p
+            rec_source_tag = "from pasted job description / email section"
+        elif DEFAULT_STORAGE_FILE.is_file():
+            fallback_db, _ = load_database_from_location(DEFAULT_STORAGE_FILE)
+            if fallback_db:
+                current_rec_list = list(fallback_db.keys())
+                rec_source_tag = f"from default database `{DEFAULT_STORAGE_FILE.name}`"
 
     col_sr1, col_sr2 = st.columns(2)
     with col_sr1:
@@ -809,7 +900,7 @@ with tab_db:
     user_loaded_path = st.session_state.get("user_loaded_db_path")
 
     # Requirement 4: If the user does not load/upload the database in Tab 1, modify & delete should not work!
-    if not user_loaded_path or not Path(user_loaded_path).is_file():
+    if not user_loaded_path or not Path(user_loaded_path).is_file() or "requirements" in str(user_loaded_path).lower():
         st.warning(
             "⚠️ **Modification and deletion are disabled.**\n\n"
             "No database file has been loaded from location in the **Chat & Auto-Email** section. "
@@ -906,9 +997,9 @@ with tab_domains:
     user_loaded_path = st.session_state.get("user_loaded_db_path")
     if st.session_state.get("memory_database"):
         db_for_domains = st.session_state.memory_database
-        active_db_target = Path(user_loaded_path) if user_loaded_path else resolve_database_path()
+        active_db_target = Path(user_loaded_path) if user_loaded_path and "requirements" not in str(user_loaded_path).lower() else resolve_database_path()
         view_source_desc = f"in-memory database `{active_db_target.name}`"
-    elif user_loaded_path and Path(user_loaded_path).is_file():
+    elif user_loaded_path and Path(user_loaded_path).is_file() and "requirements" not in str(user_loaded_path).lower():
         active_db_target = Path(user_loaded_path)
         db_for_domains, _ = load_database_from_location(active_db_target)
         view_source_desc = f"loaded database `{active_db_target.name}`"

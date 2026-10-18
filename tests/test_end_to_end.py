@@ -222,3 +222,23 @@ def test_streamlit_app_renders_without_exceptions():
     at.run()
     # Confirm that there are no unhandled exceptions (such as nested expanders)
     assert len(at.exception) == 0, f"AppTest raised exceptions: {at.exception}"
+
+
+# ==============================================================================
+# 6. Safeguard: requirements.txt is NEVER treated as email database
+# ==============================================================================
+def test_requirements_txt_is_rejected_and_defaults_to_email_storage():
+    from email_db_helper import resolve_database_path, DEFAULT_STORAGE_FILE
+    from config_loader import get_recipients
+
+    # 1. resolve_database_path with requirements.txt must return Email_Storage.json
+    resolved = resolve_database_path("requirements.txt")
+    assert resolved == DEFAULT_STORAGE_FILE
+    assert "requirements" not in resolved.name.lower()
+
+    # 2. get_recipients() should load valid recipients from Email_Storage.json
+    recipients = get_recipients()
+    assert isinstance(recipients, list)
+    assert len(recipients) > 0
+    assert all("@" in r for r in recipients)
+

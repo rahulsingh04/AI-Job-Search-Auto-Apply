@@ -93,7 +93,9 @@ def get_generic_email_prefixes() -> List[str]:
 
 def get_recipients() -> List[str]:
     """Load list of recipient email addresses dynamically from active Email_Storage.json."""
-    storage_file = PROJECT_ROOT / "bin" / "data" / "Email_Storage.json"
+    storage_file = PROJECT_ROOT / "Email_Storage.json"
+    if not storage_file.is_file():
+        storage_file = PROJECT_ROOT / "bin" / "data" / "Email_Storage.json"
     if storage_file.is_file():
         storage_data = _read_json(storage_file)
         if isinstance(storage_data, dict):

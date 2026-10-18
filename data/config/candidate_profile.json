@@ -1,29 +1,20 @@
 {
-    "name": "Rahul Singh",
+    "name": "transformer encoderdecoderencoderdecoder",
     "current_role": "Data Scientist",
     "previous_role": "",
     "experience_summary": "3+ years of professional Data Science experience",
     "education": "",
     "technical_skills": [
-        "• Programming Data Analysis: Python , Pandas , NumPy , PySpark, SQL.",
-        "• Generative AI NLP: NLP, Generative AI , OpenAI (ChatGPT), Google Gemini, LangChain , Prompt Engineering ,",
-        "Vector Search",
-        "RAG",
-        "MCP",
-        "Agentic-ai.",
-        "• AI Engineering Agentic AI: LangGraph, AI Agents, MCP",
-        "• Machine Learning: Linear Regression, Logistic Regression, Decision Trees, Bagging Boosting, Random Forest,",
-        "XGBoost",
-        "SVM",
-        "Model Evaluation",
-        "Hyperparameter Tuning",
-        "• Deep Learning: ANN, RNN, LSTM, Transformers, TensorFlow",
-        "• Statistical Analysis EDA: Univariate, bivariate, multivariate analysis , feature engineering",
-        "• Databases:MySQL , PostgreSQL , Oracle , MongoDB , Amazon Athena"
+        "Python Programming and SQL",
+        "Machine Learning: XGBoost, Random Forest, Scikit-Learn",
+        "Deep Learning: TensorFlow, Keras, PyTorch",
+        "Generative AI & LLMs: LangChain, Ollama, RAG Architectures",
+        "Data Processing: Pandas, NumPy, PySpark",
+        "Data Visualization: Matplotlib, Seaborn, Plotly"
     ],
     "projects": [
-        "AI VIsualizer LLM Powered Data Visualization Agent (NITS) Gurgaon, Haryana, India",
-        "execution and structured response handling",
-        "Chronic Kidney Disease (Althea.ai) Noida, UttarPradesh, India"
+        "Predictive Modelling and Healthcare Risk Analytics",
+        "Automotive Part Identification and Machine Learning",
+        "Generative AI and Agentic Workflow Pipelines"
     ]
 }
