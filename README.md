@@ -11,7 +11,7 @@ flowchart TD
     subgraph UI ["User Interfaces"]
         UI_Web["Streamlit Web Dashboard<br/>(app.py / bin/app.py)"]
         UI_CLI["CLI Script<br/>(bin/main.py)"]
-        UI_SH["Automated Launcher<br/>(run.sh / run/mail_sender.sh / .bat)"]
+        UI_SH["Automated Shell Launcher<br/>(run/run.sh / run/mail_sender.sh)"]
     end
 
     subgraph ConfigLayer ["Configuration Layer (data/config/)"]
@@ -65,26 +65,26 @@ flowchart TD
 ## 📂 Project Structure
 
 ```
-AI-Job-Search-and-Auto-Apply/
+AI-Job-Search-Auto-Apply/
 ├── app.py                            # 🌐 Root Streamlit web launcher
-├── run.sh                            # ⚡ Root automated environment & launch script
-├── pyproject.toml                    # 📦 Python project & dependencies (Author: RAHUL KUMAR SINGH)
+├── pyproject.toml                    # 📦 Python project & dependencies (Requires Python >=3.10)
 ├── README.md                         # 📖 Documentation & guides
 │
-├── bin/                              # 🚀 Execution & Storage
+├── bin/                              # 🚀 Execution
 │   ├── app.py                        # Main Streamlit dashboard (4 tabs)
-│   ├── main.py                       # CLI batch execution script
-│   └── data/
-│       ├── Email_Storage.json        # Active sorted recipient history & dedup storage
-│       └── Email_Storage_*.json      # Timestamped archives automatically created on ingestion
+│   └── main.py                       # CLI batch execution script
 │
-├── run/                              # ⚡ Modular Launchers
-│   ├── mail_sender.sh                # Shell script with step tracker & terminal viewer
+├── run/                              # ⚡ Automated Shell & Batch Launchers
+│   ├── run.sh                        # Auto environment detector & Streamlit launcher
+│   ├── mail_sender.sh                # Shell script with step progress tracker
 │   └── mail_sender.bat               # Windows batch launcher
 │
-├── doc/
+├── docs/                             # 📚 Documentation & Testing Notebooks
 │   └── nb/
-│       └── test_case1.ipynb          # 🧪 12-Step modular end-to-end test suite
+│       └── testing.ipynb             # 🧪 12-Chunk pipeline walkthrough & verification
+│
+├── tests/                            # ✅ Automated Test Suite
+│   └── test_end_to_end.py            # End-to-end Pytest suite (Config, DB, AI, Sender, AppTest)
 │
 ├── data/
 │   └── config/                       # ⚙️ JSON Configuration Bucket
@@ -95,149 +95,257 @@ AI-Job-Search-and-Auto-Apply/
 │       └── generic_email_names.json  # Prefixes to skip for personal name inference
 │
 └── src/                              # 🧩 Modular Source Code
-    ├── config_loader.py              # Configuration loader & saver helper
+    ├── config_loader.py              # Configuration loader & atomic saver helper
     ├── email_db_helper.py            # Multi-format parser, strict regex, backups & domain ops
-    │
     ├── ai_email_writer/              # 🤖 AI Generation & Quality Control
-    │   ├── model.py                  # Local Ollama model initialization
-    │   ├── recipient.py              # Name inference (Hi [Name],)
-    │   ├── formatter.py              # Skills numbering & greeting enforcement
-    │   ├── validator.py              # Email body completeness & quality validator
-    │   ├── generator.py              # Generation orchestrator with retry & fallback
-    │   ├── prompts.py                # Dynamic generic system prompt from candidate_profile
-    │   ├── profile.py                # Candidate profile text builder & PDF parser
-    │   └── schemas.py                # Pydantic response models
-    │
     └── email_sender/                 # 📤 Email Delivery & Protection
-        ├── batch.py                  # Streaming batch outreach generator & pipeline
-        ├── sender.py                 # Single email dispatch with dedup
-        ├── builder.py                # MIME multipart message builder
-        ├── attachments.py            # PDF resume attachment validator
-        ├── storage.py                # Atomic JSON history persistence
-        ├── smtp.py                   # TLS SMTP client
-        └── date_utils.py             # Calendar month/day/year math
 ```
 
 ---
 
-## 🚀 Quick Start Guide
+## 🚀 Quick Start & Prerequisites
 
-### Prerequisites
-1. **Ollama**: Download and install [Ollama](https://ollama.com). Pull the local reasoning model:
-   ```bash
-   ollama pull deepseek-r1:1.5b
-   ```
-2. **Gmail App Password**: Generate a 16-character password via:
-   [Google App Passwords Direct Link](https://myaccount.google.com/apppasswords?rapt=AEjHL4OxjMhR8sHJ0zDg_QESBF0hz-FbIdCGL5w8_Z3ANcLxtBpaXoyvsshRYbMjzGsKw8wCMWqG6bWL8TtMHNNUutxlbtvTngrfFjkaeqgP69mxLVTlA14)
-3. **Resume PDF**: Upload your resume PDF through the Streamlit UI or place it in the project root.
+1. **Python Environment**: Python 3.10 or higher.
+2. **Ollama (Optional for AI Personalization)**:
+   - Download and install [Ollama](https://ollama.com).
+   - Pull the recommended local reasoning model:
+     ```bash
+     ollama pull deepseek-r1:1.5b
+     ```
+   - *Note*: If Ollama is offline or not installed, the application automatically applies a robust offline fallback using the generic body template.
+3. **Gmail App Password (for SMTP sending)**:
+   - Generate a 16-character application password from your Google Account:
+     [Google App Passwords](https://myaccount.google.com/apppasswords)
+   - Store credentials securely; never commit sensitive passwords or private keys to version control.
 
 ---
 
-### Method 1: One-Click Automated Script (Recommended)
+## 💻 How to Run the Project
 
-#### On Linux / macOS / Git Bash:
+### ⚡ Primary Shell File Command
+
+The primary automated launcher is [`run/run.sh`](file:///c:/Users/javar/OneDrive/Desktop/test_app/backup11/AI-Job-Search-Auto-Apply/run/run.sh). It automatically:
+1. Reads requirements (`requires-python = ">=3.10"`) from `pyproject.toml`.
+2. Inspects your computer for an existing compatible Python environment (active Conda/virtualenv or system `python`).
+3. Uses your existing Python environment directly (or automatically creates `.venv` if none exists).
+4. Runs `pip install .` to ensure all packages are up-to-date.
+5. Launches the Streamlit frontend.
+
+---
+
+### 🖥️ Running in Different Terminals
+
+#### 1. Git Bash (Recommended for Windows)
 ```bash
-bash run.sh
-# or: bash run/mail_sender.sh
+bash run/run.sh
+```
+*Or grant execution permission and run directly:*
+```bash
+chmod +x run/run.sh
+./run/run.sh
 ```
 
-#### On Windows (Command Prompt or PowerShell):
+#### 2. Windows PowerShell
+```powershell
+& "C:\Program Files\Git\bin\bash.exe" run/run.sh
+```
+*Or if `bash` is in your Windows PATH:*
+```powershell
+bash run/run.sh
+```
+
+#### 3. Windows Command Prompt (CMD)
 ```cmd
-run\mail_sender.bat
+"C:\Program Files\Git\bin\bash.exe" run/run.sh
+```
+*Or if `bash` is on your PATH:*
+```cmd
+bash run/run.sh
 ```
 
-**What the launcher does automatically:**
-1. Detects your active Python environment (Conda, Virtualenv, or System PATH).
-2. Checks project dependencies; if missing, creates a virtual environment (`.venv`).
-3. Runs `pip install -e .[dev]` to install all packages declared in `pyproject.toml` (developed by **RAHUL KUMAR SINGH**).
-4. Automatically launches the Streamlit frontend with clean step-by-step terminal output.
+#### 4. Linux / macOS Terminal
+```bash
+chmod +x run/run.sh
+./run/run.sh
+```
+
+#### 5. Windows Subsystem for Linux (WSL)
+```bash
+wsl bash run/run.sh
+```
 
 ---
 
-### Method 2: Manual Streamlit Web App
+### ⚙️ Running via JSON Configuration (VS Code & NPM)
 
-For a fresh Python environment (all packages managed directly via `pyproject.toml`):
+#### Option A: VS Code `tasks.json` (Recommended for IDE One-Click Run)
+Create or update `.vscode/tasks.json` in the project root:
+
+```json
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Run AI Job Search & Auto-Apply",
+            "type": "shell",
+            "command": "bash",
+            "args": ["run/run.sh"],
+            "windows": {
+                "command": "C:\\Program Files\\Git\\bin\\bash.exe",
+                "args": ["run/run.sh"]
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": []
+        }
+    ]
+}
+```
+*To run:* Press `Ctrl + Shift + B` (or `Cmd + Shift + B` on macOS).
+
+---
+
+#### Option B: VS Code Debugger `launch.json`
+Create or update `.vscode/launch.json` to launch the application with the Python debugger:
+
+```json
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Streamlit: AI Job Search App",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "streamlit",
+            "args": [
+                "run",
+                "app.py",
+                "--server.port=8501",
+                "--server.headless=false"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ]
+}
+```
+*To run:* Press `F5` in VS Code.
+
+---
+
+#### Option C: `package.json` Scripts (for Node.js / NPM toolchains)
+If you manage scripts with npm or yarn:
+
+```json
+{
+    "name": "ai-job-auto-apply",
+    "version": "0.3.0",
+    "scripts": {
+        "start": "bash run/run.sh",
+        "start:win": "\"C:\\Program Files\\Git\\bin\\bash.exe\" run/run.sh",
+        "app": "python -m streamlit run app.py",
+        "test": "pytest tests/test_end_to_end.py -v"
+    }
+}
+```
+*To run:*
 ```bash
-# 1. Install project dependencies in editable mode
-pip install -e ".[dev]"
+npm run start
+# on Windows cmd/powershell:
+npm run start:win
+```
 
-# 2. Launch web interface
-streamlit run app.py
+---
+
+### 📦 Manual Direct Python Execution
+
+If you prefer to run Streamlit directly without the shell script:
+
+```bash
+# 1. Install dependencies from pyproject.toml
+pip install .
+
+# 2. Launch Streamlit
+python -m streamlit run app.py
 ```
 
 ---
 
 ## 🖥️ Streamlit Frontend Dashboard Guide
 
-The web interface is organized into 4 specialized tabs:
+The web dashboard is organized into 4 specialized tabs:
 
 ### 💬 Tab 1: Chat & Auto-Email
-- **Resume Upload & AI Extractor**: Automatically parses your PDF/TXT resume using LLM with regex fallback and Pydantic validation directly into `candidate_profile.json`.
-- **Database File Location**: Specify the exact location of your database file (`.json`, `.csv`, `.xlsx`, `.txt`). Defaults to `bin/data/Email_Storage.json` and loads active records dynamically.
-- **Automatic Ingestion & Current DB Backup**: Pasting single emails, multiple emails, raw text, or job postings into `"Add Email(s) / Paste Job Description Script:"` extracts all valid emails, **first creates a backup of the current database file** (`Email_Storage_<date>_<time>.json`), and **then adds the updated emails** in sorted, deduplicated order.
-- **Directory Export & Snapshot Backups**: In the export section, clicking Save or Download automatically saves the exported files (`Email_Storage.csv`, `.xlsx`, `.txt`, `.json`) **directly in the same directory where the database file is located**, and also creates the timestamped backup `Email_Storage_<date>_<time>.json` in the same directory **without asking**.
-
-- **Real-Time Streaming Outreach**: Clicking `"🚀 Send Automatic Email"` streams progressive live updates:
-  1. `📊 In your database you have X emails`
-  2. `⏱️ From the last {LOOK-BACK}_{UNIT} you have already sent Y emails`
-  3. `📬 Remaining emails to process: Z`
-  4. Per email:
-     - Shows recipient address, sender address, and subject
-     - Displays the generic template
-     - Detects local LLM; if online, generates personalized body; if offline, reports:
-       `⚠️ Oops, sorry! No LLM detected. Switching to the generic body...`
-     - Dispatches via TLS SMTP
-     - Displays remaining emails left to process
+- **Resume Upload & AI Profile Extractor**: Parses candidate PDF/TXT resumes using regex and Pydantic schema validation.
+- **Recipient Database Location & Ingestion**:
+  - Specify any database file (`.json`, `.csv`, `.xlsx`, `.txt`).
+  - Native file browser dialog (`🗂️ Navigate & Choose File`) to load contacts directly into memory.
+  - **In-Memory Ready Inspector**: Quickly inspect loaded recipient emails with the popover viewer (`👁️ View Emails Loaded in Memory`).
+  - **Script Scraper & Auto-Backups**: Paste raw text or job descriptions to scrape emails. The system creates an immutable backup (`Email_Storage_<date>_<time>.json`) before adding new contacts.
+- **Real-Time Streaming Outreach**: Streams progressive live progress per recipient:
+  - Subject line length validation and mobile client truncation preview.
+  - LLM personalization (with automatic fallback to generic template if offline).
+  - Live remaining count and delivery status.
 
 ### 🔍 Tab 2: Dynamic Subject, Body & System Prompt
-- **Dynamic Subject Line**: Real-time length validation and mobile client truncation warnings ($\le 60$ characters).
-- **Quality Validator**: Tests the general body against the `EmailValidator` tool (checks greeting, closing, signature, word count, cut-off sentences, placeholder leaks).
-- **Dynamic Generic System Prompt**: Directly exposes `candidate_profile.json` details to the LLM. Enforces:
-  - An exceptionally polite, respectful, and humble tone.
-  - Proper bullet points (`•`) whenever presenting skills or achievements.
-  - Double newlines (`\n\n`) between sentences/paragraphs when transitioning sections.
-  - Interactive editor with a **"🔄 Reset to Generic Prompt"** button.
+- **Dynamic Subject Line**: Real-time length calculation and recommendations ($\le 60$ characters).
+- **Quality Validator**: Tests the general body against the `EmailValidator` tool (detects unfinished sentences, missing signatures, or placeholder leaks like `[Insert Company]`).
+- **Dynamic System Prompt**: Exposes profile attributes to the LLM while enforcing respectful tone, proper bullet points (`•`), and double newline paragraph separation.
 
 ### 🗄️ Tab 3: Database Manager (Modify & Delete Only)
-- **Modify Contact Record**: Select any contact in the database to edit their email address or update their last contacted timestamp.
-- **Delete Contact Record(s)**: Select single/multiple emails or paste a text script to scrape and delete matching contacts.
-- **Live Searchable Preview**: Interactive table of all stored contacts and last contacted dates.
+- **Modify Contact Record**: Update recipient email addresses or adjust their last contacted timestamps.
+- **Delete Contact Records**: Single, multi-select, or script-based deletion with double-confirmation safety checks.
 
 ### 🌐 Tab 4: Domain-Wise Email Viewer & Analytics
-- **Analytics KPIs**: Displays Total Emails, Unique Domains, Contacted Count, and Uncontacted/Pending Count.
-- **Domain Search**: Search and filter contacts by company domain name (e.g., `capgemini.com`, `ey.com`, `fractal.ai`).
-- **Domain Actions**: Export contacts for a specific domain as CSV, or delete an entire domain.
-- **Two-Step Confirmation Security**:
-  - Deleting an individual contact requires a second confirmation check.
-  - Deleting an entire domain requires an explicit bulk deletion confirmation banner.
+- **Analytics KPIs**: Total Emails, Unique Domains, Contacted Count, and Pending Contacts.
+- **Domain Search & Filtering**: Filter contacts by company domain (e.g. `@google.com`, `@capgemini.com`).
+- **Domain Actions**: Export domain contacts as CSV or perform safe bulk domain deletions.
 
 ---
 
 ## 🧪 Modular End-to-End Test Suite
 
-Run all backend components without Streamlit in Jupyter:
+### 1. Automated Pytest Suite
+Run the full test suite covering configuration, database helpers, AI writer, email sender, and headless Streamlit AppTest:
+
 ```bash
-jupyter notebook doc/nb/test_case1.ipynb
+pytest tests/test_end_to_end.py -v
 ```
-The notebook tests 12 modular steps:
-1. Environment & Path Initialization
-2. Dynamic Candidate Profile & Config Loader
-3. Dynamic Generic System Prompt Generation
-4. Multi-format Database Loading (`.json`, `.csv`, `.xlsx`, `.txt`)
-5. Strict Email Validation & Text Scraping (`is_valid_email`)
-6. Recipient Salutation & Name Inference (`Hi [Name],`)
-7. Email Body Quality Validator (`EmailValidator`)
-8. Graceful Fallback Engine when LLM is Offline
-9. Look-back Window & Deduplication Skip Logic
-10. Multi-format Database Export (`.json`, `.csv`, `.xlsx`, `.txt`)
-11. Domain-Wise Analytics & Domain Operations
-12. End-to-End Streaming Batch Outreach Simulation (`run_email_batch_stream`)
+
+### 2. Interactive Pipeline Jupyter Notebook
+Open and run the step-by-step pipeline walkthrough:
+
+```bash
+jupyter notebook docs/nb/testing.ipynb
+```
+*(Also mirrored at `doc/nb/testing.ipynb` for convenience).*
+
+The notebook breaks down the pipeline into 12 standalone executable chunks:
+1. Path & Environment Setup
+2. Configuration & Candidate Profile Loader
+3. Resume Parsing & Profile Extraction
+4. Recipient Ingestion & Strict Regex Validation
+5. Recruiter Humanization & Name Inference
+6. Dynamic System Prompt & Tone Engineering
+7. AI Email Writer, Validator & Offline Fallback
+8. Lookback Window & Anti-Spam Deduplication
+9. MIME Multipart Email Assembly & PDF Attachments
+10. Multi-Format Exports & Domain Analytics
+11. Streaming Batch Outreach Generator
+12. Streamlit Web App Headless Verification
 
 ---
 
 ## 🛡️ Reliability & Safety Guarantees
 
-- **Strict Regex Filtering**: Eliminates malformed addresses (e.g. `user@domain.`, trailing dots, bracketed characters) with TLD length $\ge 2$.
-- **Automatic Versioned Backups**: Never lose contact history; every ingestion creates an immutable timestamped file.
-- **Zero Accidental Sends**: Contacts emailed within the look-back window are skipped before calling the LLM or SMTP.
-- **Double-Confirmation Deletion**: Prevents accidental data deletion with interactive confirmation dialogues.
+- **No Sensitive Data Leaks**: Passwords and application tokens are never hardcoded or tracked in version control.
+- **Strict Email Validation**: RFC-compliant regex eliminates malformed addresses and invalid TLDs.
+- **Versioned Backups**: Every ingestion automatically saves a timestamped backup before modifying recipient records.
+- **Zero Accidental Sends**: Recipients contacted within the configurable lookback window are automatically skipped.
+- **Two-Step Deletion Confirmation**: Interactive confirmation dialogues prevent accidental contact deletion.

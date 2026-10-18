@@ -320,8 +320,12 @@ with tab_chat:
                 mem_db = st.session_state.memory_database
                 loaded_file_obj = Path(st.session_state.user_loaded_db_path or st.session_state.active_db_path)
                 st.caption(f"🧠 **In-Memory Ready:** `{loaded_file_obj.name}` ({len(mem_db)} emails loaded)")
-                with st.expander(f"👁️ View {len(mem_db)} Emails Loaded in Memory", expanded=False):
-                    st.code("\n".join(mem_db.keys()), language="text")
+                if hasattr(st, "popover"):
+                    with st.popover(f"👁️ View {len(mem_db)} Emails Loaded in Memory", use_container_width=True):
+                        st.code("\n".join(mem_db.keys()), language="text")
+                else:
+                    if st.checkbox(f"👁️ View {len(mem_db)} Emails Loaded in Memory", value=False, key="chat_view_loaded_emails_chk"):
+                        st.code("\n".join(mem_db.keys()), language="text")
             elif st.session_state.user_loaded_db_path:
                 cand_path = resolve_database_path(st.session_state.user_loaded_db_path)
                 if cand_path.is_file():

@@ -25,3 +25,4 @@ src/email_sender/date_utils.py
 src/email_sender/sender.py
 src/email_sender/smtp.py
 src/email_sender/storage.py
+tests/test_end_to_end.py
