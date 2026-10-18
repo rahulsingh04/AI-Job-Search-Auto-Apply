@@ -1,0 +1,15 @@
+Metadata-Version: 2.4
+Name: ai-job-auto-apply
+Version: 0.3.0
+Summary: AI-powered job-application email sender using local Ollama models and Streamlit UI
+Requires-Python: >=3.10
+Requires-Dist: langchain-ollama<2.0.0,>=1.1.0
+Requires-Dist: langchain-core<2.0.0,>=1.0.0
+Requires-Dist: pydantic<3.0.0,>=2.7.0
+Requires-Dist: streamlit>=1.30.0
+Requires-Dist: pandas>=2.0.0
+Requires-Dist: pypdf>=4.0.0
+Requires-Dist: watchdog>=3.0.0
+Provides-Extra: dev
+Requires-Dist: ipykernel>=6.29; extra == "dev"
+Requires-Dist: pytest>=7.0.0; extra == "dev"

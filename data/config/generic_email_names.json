@@ -1,0 +1,14 @@
+{
+    "generic_email_prefixes": [
+        "career", "careers", "hr", "jobs", "job",
+        "recruitment", "recruiter", "hiring", "talent",
+        "info", "contact", "support", "admin", "hello",
+        "office", "team", "enquiry", "enquiries", "sales",
+        "noreply", "notifications", "applications", "apply",
+        "mail", "billing", "accounts", "service", "marketing",
+        "help", "customerservice", "customer", "feedback",
+        "jobsindia", "recruitmentteam", "careersindia",
+        "example", "test", "username", "firstname", "lastname"
+    ]
+}
+

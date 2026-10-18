@@ -1,0 +1,200 @@
+"""
+Email Generator with LLM Personalization and Fallback
+=====================================================
+Orchestrates AI rewriting using local Ollama models, enforces salutation,
+bullet points, and \\n\\n spacing, and handles graceful fallback when no LLM is detected.
+"""
+
+from typing import Optional
+from pydantic import ValidationError
+
+try:
+    from langchain_core.messages import SystemMessage, HumanMessage
+    from .model import structured_llm
+    LANGCHAIN_AVAILABLE = True
+except (ImportError, Exception):
+    SystemMessage = None
+    HumanMessage = None
+    structured_llm = None
+    LANGCHAIN_AVAILABLE = False
+
+from .schemas import EmailResponse
+from .prompts import get_active_system_prompt
+from .recipient import infer_recipient_name
+from .formatter import format_email_body, enforce_correct_greeting
+
+
+
+class LLMUnavailableError(Exception):
+    """Raised when Ollama server is offline or unreachable."""
+    pass
+
+
+def is_invalid_email(body_text: str) -> bool:
+    """Detect empty, oversized, or copied-profile responses."""
+    text = body_text.strip().lower()
+
+    if not text:
+        return True
+
+    profile_markers = [
+        "current organization:",
+        "previous organization:",
+        "technical skills:",
+        "relevant project experience:",
+        "professional experience:",
+        "education:",
+    ]
+
+    marker_count = sum(marker in text for marker in profile_markers)
+
+    if marker_count >= 2:
+        return True
+
+    if len(text) > 3000:
+        return True
+
+    return False
+
+
+def generate_professional_email(
+    recipient_email: str,
+    general_subject: str,
+    general_body: str,
+    system_prompt: Optional[str] = None,
+) -> EmailResponse:
+    """
+    Rewrite an email using the local Ollama model.
+    If the LLM server is unreachable, raises LLMUnavailableError so the caller can switch to fallback.
+
+    Returns:
+        EmailResponse containing the tailored subject (if generated) and formatted body.
+    """
+    if not recipient_email or not recipient_email.strip():
+        raise ValueError("Recipient email cannot be empty.")
+
+    if not general_subject or not general_subject.strip():
+        raise ValueError("General subject cannot be empty.")
+
+    if not general_body or not general_body.strip():
+        raise ValueError("General body cannot be empty.")
+
+    recipient_name = infer_recipient_name(recipient_email)
+    recipient_name_context = recipient_name if recipient_name else "Not identifiable; use a polite general greeting"
+
+    active_prompt = get_active_system_prompt(system_prompt)
+
+    user_prompt = f"""
+Please rewrite the following email for the recipient respectfully and professionally.
+
+RECIPIENT EMAIL:
+{recipient_email}
+
+RECIPIENT NAME:
+{recipient_name_context}
+
+ORIGINAL SUBJECT:
+{general_subject}
+
+ORIGINAL GENERIC BODY:
+{general_body}
+
+INSTRUCTIONS:
+- Write in a highly respectful, humble, and polite tone.
+- When transitioning from one thought/sentence to the next paragraph, use double newlines (\\n\\n).
+- Present key skills or achievements as bullet points (•) on separate lines with \\n\\n spacing.
+- Mention the attached resume.
+- Sign off respectfully.
+- Return ONLY valid JSON with 'subject' and 'body' fields.
+"""
+
+    if not LANGCHAIN_AVAILABLE or structured_llm is None or SystemMessage is None or HumanMessage is None:
+        raise LLMUnavailableError("No LLM detected (LangChain/Ollama libraries not initialized). Switching to generic body.")
+
+    last_error = None
+    last_raw_output = ""
+
+
+    for attempt in range(2):
+        current_prompt = user_prompt
+        if attempt == 1:
+            current_prompt += """
+
+CORRECTION:
+The previous response did not satisfy requirements.
+Ensure respectful tone, double newlines (\\n\\n) between sections, and clean bullet points (•).
+Return ONLY JSON with 'subject' and 'body'.
+"""
+
+        try:
+            response = structured_llm.invoke([
+                SystemMessage(content=active_prompt),
+                HumanMessage(content=current_prompt),
+            ])
+        except Exception as exc:
+            # Detect connection or server unavailable errors
+            err_str = str(exc).lower()
+            if any(term in err_str for term in ["connect", "refused", "unavailable", "timeout", "offline", "not found"]):
+                raise LLMUnavailableError(f"No LLM detected or Ollama server connection failed: {exc}") from exc
+            raise
+
+        raw_message = response.get("raw")
+        last_raw_output = str(raw_message.content) if raw_message is not None else ""
+
+        if response.get("parsing_error") is not None:
+            last_error = f"JSON/Pydantic parsing failed: {response['parsing_error']}"
+            continue
+
+        result = response.get("parsed")
+
+        try:
+            if isinstance(result, dict):
+                result = EmailResponse.model_validate(result)
+
+            if not isinstance(result, EmailResponse):
+                raise ValueError("The model did not return a valid EmailResponse.")
+
+        except (ValidationError, ValueError) as exc:
+            last_error = str(exc)
+            continue
+
+        if is_invalid_email(result.body):
+            last_error = "The model copied profile info or returned an overly long response."
+            continue
+
+        # Format greeting and clean bullet spacing
+        formatted_body = format_email_body(
+            body_text=result.body,
+            recipient_name=recipient_name,
+        )
+
+        final_subject = result.subject.strip() if (result.subject and result.subject.strip()) else general_subject
+
+        return EmailResponse(
+            subject=final_subject,
+            body=formatted_body,
+        )
+
+    # If retry attempts exhausted without returning, raise
+    raise ValueError(
+        f"Could not generate a valid email after attempts. Last issue: {last_error}"
+    )
+
+
+def build_fallback_email(
+    recipient_email: str,
+    general_subject: str,
+    general_body: str,
+) -> EmailResponse:
+    """
+    Builds the formatted fallback email using the static/generic body
+    with correct recipient greeting and \\n\\n line breaks.
+    """
+    recipient_name = infer_recipient_name(recipient_email)
+    formatted = enforce_correct_greeting(general_body, recipient_name)
+    # Ensure double newlines for paragraph spacing
+    normalized = formatted.replace("\r\n", "\n")
+    return EmailResponse(
+        subject=general_subject,
+        body=normalized,
+    )

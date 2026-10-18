@@ -1,6 +1,0 @@
-langchain-ollama<2.0.0,>=1.1.0
-langchain-core<2.0.0,>=1.0.0
-pydantic<3.0.0,>=2.7.0
-
-[dev]
-ipykernel>=6.29

@@ -1,0 +1,11 @@
+langchain-ollama<2.0.0,>=1.1.0
+langchain-core<2.0.0,>=1.0.0
+pydantic<3.0.0,>=2.7.0
+streamlit>=1.30.0
+pandas>=2.0.0
+pypdf>=4.0.0
+watchdog>=3.0.0
+
+[dev]
+ipykernel>=6.29
+pytest>=7.0.0

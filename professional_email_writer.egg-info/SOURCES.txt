@@ -1,7 +1,0 @@
-README.md
-pyproject.toml
-professional_email_writer.egg-info/PKG-INFO
-professional_email_writer.egg-info/SOURCES.txt
-professional_email_writer.egg-info/dependency_links.txt
-professional_email_writer.egg-info/requires.txt
-professional_email_writer.egg-info/top_level.txt

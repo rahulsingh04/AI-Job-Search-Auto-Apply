@@ -1,0 +1,7 @@
+{
+    "host": "smtp.gmail.com",
+    "port": 587,
+    "timeout": 30,
+    "use_tls": true
+}
+
