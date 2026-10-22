@@ -49,30 +49,79 @@ def send_email(
         today = date.today()
 
         # Check whether this recipient was emailed recently.
-        last_sent_string = email_data.get(recipient_email)
+        # Match the recipient case-insensitively and repair recognized date formats.
+        recipient_key = next(
+            (
+                stored_email
+                for stored_email in email_data
+                if str(stored_email).strip().lower() == recipient_email.strip().lower()
+            ),
+            recipient_email,
+        )
+        last_sent_string = email_data.get(recipient_key)
+        raw_last_sent = (
+            str(last_sent_string).strip()
+            if last_sent_string is not None
+            else ""
+        )
 
-        if last_sent_string is not None:
+        # Blank or "Never" means the recipient has not been emailed before.
+        if raw_last_sent and raw_last_sent.lower() != "never":
+            last_sent_date = None
+
             try:
-                last_sent_date = datetime.strptime(
-                    last_sent_string,
-                    "%Y-%m-%d"
+                # Accept ISO dates and ISO timestamps.
+                last_sent_date = datetime.fromisoformat(
+                    raw_last_sent.replace("Z", "+00:00")
                 ).date()
+            except (ValueError, TypeError):
+                # Try common date formats, prioritizing day/month/year.
+                for date_format in (
+                    "%d/%m/%Y",
+                    "%d-%m-%Y",
+                    "%d.%m.%Y",
+                    "%Y/%m/%d",
+                    "%Y.%m.%d",
+                    "%d/%m/%y",
+                    "%d-%m-%y",
+                    "%d.%m.%y",
+                    "%d-%b-%Y",
+                    "%d %b %Y",
+                    "%d %B %Y",
+                    "%B %d, %Y",
+                    "%b %d, %Y",
+                ):
+                    try:
+                        last_sent_date = datetime.strptime(
+                            raw_last_sent, date_format
+                        ).date()
+                        break
+                    except ValueError:
+                        continue
 
-            except (ValueError, TypeError) as exc:
-                # Fail safely rather than risk a duplicate send
-                # because the stored date is invalid.
+            if last_sent_date is None:
                 raise ValueError(
                     f"Invalid stored date for {recipient_email}: "
-                    f"{last_sent_string!r}. Correct the history "
-                    "before sending."
-                ) from exc
+                    f"{last_sent_string!r}. Automatic repair failed. "
+                    "Supported formats include YYYY-MM-DD, DD/MM/YYYY, "
+                    "DD-MM-YYYY, DD.MM.YYYY, and ISO timestamps."
+                )
+
+            normalized_date = last_sent_date.strftime("%Y-%m-%d")
+
+            # Persist the repair immediately, even if sending is skipped below.
+            if raw_last_sent != normalized_date:
+                email_data[recipient_key] = normalized_date
+                save_email_storage(email_data)
+                print(
+                    f"[Email Storage] Repaired date for {recipient_key}: "
+                    f"{raw_last_sent!r} -> {normalized_date}"
+                )
 
             if last_sent_date >= lookback_date:
                 print(
-                    f"Email NOT sent to {recipient_email}. "
-                    f"Last sent on {last_sent_date}; this is "
-                    f"within the configured look-back period "
-                    f"of {look_back} {look_back_format}."
+                    f"[Email] Skipping {recipient_email}: already emailed on "
+                    f"{normalized_date}, within the lookback period."
                 )
                 return False
 
@@ -93,6 +142,11 @@ def send_email(
             recipient_email=recipient_email
         )
 
+    except ValueError as exc:
+        if str(exc).startswith("Invalid stored date for "):
+            raise
+        print(f"Email sending failed: {exc}")
+        return False
     except Exception as exc:
         print(f"Email sending failed: {exc}")
         return False
