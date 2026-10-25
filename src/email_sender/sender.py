@@ -1,9 +1,11 @@
 from datetime import date, datetime
+from typing import Optional, Union
+from pathlib import Path
 
 from .date_utils import get_lookback_date
 from .builder import build_email_message
 from .smtp import send_via_gmail
-from .storage import load_email_storage, save_email_storage
+from .storage import load_email_storage, save_email_storage, record_successful_send
 
 
 def send_email(
@@ -14,10 +16,12 @@ def send_email(
     sender_password: str,
     attachments=None,
     look_back: int = 0,
-    look_back_format: str = "day"
+    look_back_format: str = "day",
+    custom_db_path: Optional[Union[str, Path]] = None,
 ) -> bool:
     """
     Send an email with optional PDFs and duplicate-send protection.
+    Immediately updates Email_Storage.json (and optional custom_db_path) upon success.
 
     Returns True if SMTP sending succeeds, otherwise False.
     """
@@ -151,13 +155,14 @@ def send_email(
         print(f"Email sending failed: {exc}")
         return False
 
-    # SMTP send succeeded. Save the history separately so a storage
-    # failure is not incorrectly reported as a failed email send.
-    email_data[recipient_email] = today.strftime("%Y-%m-%d")
-
+    # SMTP send succeeded. Immediately update Email_Storage.json with recipient and sending date
+    today_str = today.strftime("%Y-%m-%d")
     try:
-        save_email_storage(email_data)
-
+        record_successful_send(
+            recipient_email=recipient_email,
+            sending_date=today_str,
+            custom_path=custom_db_path,
+        )
     except Exception as exc:
         print(
             f"Email was sent to {recipient_email}, but the history "
@@ -166,7 +171,6 @@ def send_email(
         return True
 
     print(f"Email sent successfully to {recipient_email}.")
-    print(f"Email history updated for {today}.")
+    print(f"Email_Storage.json immediately updated for {recipient_email} with date {today_str}.")
 
     return True
-

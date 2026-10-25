@@ -18,15 +18,7 @@ import pandas as pd
 # Standard project root and default storage path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STORAGE_DIR = PROJECT_ROOT
-DEFAULT_STORAGE_FILE = (
-    PROJECT_ROOT / "Email_Storage.json"
-    if (PROJECT_ROOT / "Email_Storage.json").is_file()
-    else (
-        PROJECT_ROOT / "Email_Storage.txt"
-        if (PROJECT_ROOT / "Email_Storage.txt").is_file()
-        else PROJECT_ROOT / "Email_Storage.json"
-    )
-)
+DEFAULT_STORAGE_FILE = PROJECT_ROOT / "Email_Storage.json"
 
 
 def resolve_database_path(custom_path: str | Path | None = None) -> Path:
@@ -568,6 +560,57 @@ def group_emails_by_domain(data: Dict[str, str] | List[str]) -> Dict[str, List[D
 
     # Sort domains by number of emails descending
     return dict(sorted(grouped.items(), key=lambda item: len(item[1]), reverse=True))
+
+
+def filter_grouped_domains(
+    grouped: Dict[str, List[Dict[str, Any]]],
+    query: str
+) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Filter domain-grouped email database by either domain name or full email address.
+    Supports:
+    - Full email address (e.g. 'akash.sirohi@hireoneshot.com')
+    - Email prefix/substring (e.g. 'akash.sirohi')
+    - Domain name with or without leading @ (e.g. '@hireoneshot.com' or 'hireoneshot.com')
+    - Partial domain name (e.g. 'hireoneshot')
+    """
+    if not query or not query.strip():
+        return grouped
+
+    q = query.strip().lower()
+    q_domain = q.lstrip("@").strip()
+
+    filtered: Dict[str, List[Dict[str, Any]]] = {}
+
+    for domain, emails in grouped.items():
+        domain_lower = domain.lower()
+        # Case 1: Search query matches domain name (e.g. 'capgemini.com' or '@capgemini.com' or 'capgemini')
+        if q_domain and q_domain in domain_lower:
+            # Domain itself matches query: include all contacts under this domain
+            filtered[domain] = emails
+        else:
+            # Case 2: Search query matches full email address or email username
+            matching_emails = [
+                e for e in emails
+                if q in e["email"].lower() or (q_domain and q_domain in e["email"].lower())
+            ]
+            if matching_emails:
+                filtered[domain] = matching_emails
+
+    return filtered
+
+
+def filter_database_by_query(data: Dict[str, str], query: str) -> Dict[str, str]:
+    """Filter email database dictionary by full email address or domain name."""
+    if not query or not query.strip():
+        return data
+    q = query.strip().lower()
+    q_domain = q.lstrip("@").strip()
+    return {
+        email: date_val
+        for email, date_val in data.items()
+        if q in email.lower() or (q_domain and q_domain in (email.split("@")[-1].lower() if "@" in email else email.lower()))
+    }
 
 
 def get_domain_statistics(data: Dict[str, str]) -> Dict[str, Any]:

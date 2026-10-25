@@ -11,6 +11,8 @@ __all__ = [
     "extract_profile_via_regex",
     "extract_text_from_file",
     "save_candidate_profile_config",
+    "generate_resume_templates",
+    "load_and_render_body_template",
 ]
 
 
@@ -36,6 +38,14 @@ def __getattr__(name):
     if name == "infer_recipient_name":
         from .recipient import infer_recipient_name
         return infer_recipient_name
+
+    if name == "generate_resume_templates":
+        from .templates import generate_resume_templates
+        return generate_resume_templates
+
+    if name == "load_and_render_body_template":
+        from .templates import load_and_render_body_template
+        return load_and_render_body_template
 
     if name in (
         "CandidateProfile",

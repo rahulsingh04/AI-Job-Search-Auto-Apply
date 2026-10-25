@@ -8,7 +8,7 @@ so the LLM can regenerate an improved version.
 
 import re
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 
 @dataclass
@@ -57,7 +57,12 @@ class EmailValidator:
         r"(?:rahul\s+kumar\s+singh|rahul\s+singh|rahul)",
     ]
 
-    def validate(self, body_text: str, recipient_name: str | None = None) -> ValidationReport:
+    def validate(
+        self,
+        body_text: str,
+        recipient_name: Optional[str] = None,
+        candidate_name: Optional[str] = None,
+    ) -> ValidationReport:
         """
         Run comprehensive validation checks on the email body text.
         """
@@ -99,13 +104,23 @@ class EmailValidator:
 
         # 6. Check closing and sign-off
         closing_found = any(re.search(pat, text, flags=re.IGNORECASE) for pat in self.CLOSING_PATTERNS)
-        signature_found = any(re.search(pat, text, flags=re.IGNORECASE) for pat in self.SIGNATURE_PATTERNS)
+        
+        signature_patterns = list(self.SIGNATURE_PATTERNS)
+        if candidate_name and candidate_name.strip():
+            c_clean = re.escape(candidate_name.strip())
+            signature_patterns.append(rf"\b{c_clean}\b")
+            first_name = candidate_name.strip().split()[0]
+            if len(first_name) >= 3:
+                signature_patterns.append(rf"\b{re.escape(first_name)}\b")
+
+        signature_found = any(re.search(pat, text, flags=re.IGNORECASE) for pat in signature_patterns)
 
         if not closing_found:
             issues.append("Email is missing a polite closing (e.g. 'Best regards,').")
 
         if not signature_found:
-            issues.append("Email is missing the candidate signature 'Rahul Singh' or 'Rahul Kumar Singh'.")
+            disp_name = candidate_name or "Rahul Singh"
+            issues.append(f"Email is missing the candidate signature '{disp_name}'.")
 
         # 7. Check for incomplete or cut-off sentences
         # Inspect the last paragraph before the sign-off
@@ -114,7 +129,7 @@ class EmailValidator:
             body_lines = [
                 l for l in lines[1:]
                 if not any(re.search(p, l, flags=re.IGNORECASE) for p in self.CLOSING_PATTERNS)
-                and not any(re.search(p, l, flags=re.IGNORECASE) for p in self.SIGNATURE_PATTERNS)
+                and not any(re.search(p, l, flags=re.IGNORECASE) for p in signature_patterns)
             ]
             if body_lines:
                 last_body_line = body_lines[-1].strip()
@@ -127,4 +142,3 @@ class EmailValidator:
 
 # Shared global validator instance
 email_validator = EmailValidator()
-

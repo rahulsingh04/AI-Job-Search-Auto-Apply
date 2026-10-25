@@ -43,11 +43,19 @@ from email_db_helper import (
     ingest_and_save_emails,
     group_emails_by_domain,
     get_domain_statistics,
+    filter_grouped_domains,
+    filter_database_by_query,
     delete_emails_from_database,
     delete_domain_from_database,
     update_email_in_database,
     resolve_database_path,
     is_valid_email,
+)
+from email_sender.storage import (
+    load_email_storage,
+    save_email_storage,
+    record_successful_send,
+    get_storage_file,
 )
 from email_sender.batch import run_email_batch_stream, was_recently_emailed
 from ai_email_writer.recipient import get_greeting_name, infer_recipient_name
@@ -58,6 +66,10 @@ from ai_email_writer.resume_parser import (
     parse_resume_to_profile,
     save_candidate_profile_config,
     CandidateProfile,
+)
+from ai_email_writer.templates import (
+    generate_resume_templates,
+    load_and_render_body_template,
 )
 
 # Set page config
@@ -83,25 +95,29 @@ st.markdown("""
 
 
 # ---------------------------------------------------------------------------
-# Session State Initialization
+# Session State Initialization (Synchronized Shared Database Across Sections)
 # ---------------------------------------------------------------------------
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = [
         {
             "role": "assistant",
-            "content": "👋 **Hello! I am your AI Job Application Assistant.**\n\nPlease **Add a generic body** below to get started with auto-applying to recruiters."
+            "content": "👋 **Hello! I am your AI Job Application Assistant.**\n\nPlease **select a body_template** on the left or customize your body below to get started with auto-applying to recruiters."
         }
     ]
 
-if "generic_body" not in st.session_state:
-    cfg = get_email_config()
-    st.session_state.generic_body = cfg.get("body_template", "")
+# 1. Shared Database: Single source of truth across all sections
+if "memory_database" not in st.session_state or st.session_state.memory_database is None:
+    if DEFAULT_STORAGE_FILE.is_file():
+        parsed_db, _ = load_database_from_location(DEFAULT_STORAGE_FILE)
+        st.session_state.memory_database = parsed_db or {}
+    else:
+        st.session_state.memory_database = {}
 
-if "uploaded_resume_path" not in st.session_state:
-    cfg = get_email_config()
-    resume_name = cfg.get("resume_filename", "RAHUL_SINGH_3YR_EXPERIENCE_DATA_SCIENTIST_.pdf")
-    default_resume = PROJECT_ROOT / resume_name
-    st.session_state.uploaded_resume_path = str(default_resume) if default_resume.is_file() else None
+if "active_db_path" not in st.session_state or not st.session_state.active_db_path:
+    st.session_state.active_db_path = str(DEFAULT_STORAGE_FILE)
+
+if "user_loaded_db_path" not in st.session_state or not st.session_state.user_loaded_db_path:
+    st.session_state.user_loaded_db_path = str(DEFAULT_STORAGE_FILE)
 
 # State for delete confirmations
 if "pending_delete_email" not in st.session_state:
@@ -113,39 +129,61 @@ if "pending_delete_domain" not in st.session_state:
 if "last_ingested_text_cache" not in st.session_state:
     st.session_state.last_ingested_text_cache = ""
 
-# Robust session-state sanitization to purge any stale 'requirements.txt' references
-for _key in ["user_loaded_db_path", "active_db_path", "chat_db_loc_input", "chat_db_file_nav_picker"]:
-    _val = st.session_state.get(_key)
-    if _val is not None:
-        _val_str = getattr(_val, "name", str(_val)).lower()
-        if "requirements" in _val_str:
-            del st.session_state[_key]
+# 2. Resume & Candidate Profile Initialization
+if "uploaded_resume_path" not in st.session_state:
+    cfg = get_email_config()
+    resume_name = cfg.get("resume_filename", "RAHUL_SINGH_3YR_EXPERIENCE_DATA_SCIENTIST_.pdf")
+    default_resume = PROJECT_ROOT / resume_name
+    st.session_state.uploaded_resume_path = str(default_resume) if default_resume.is_file() else None
 
-if (
-    "user_loaded_db_path" not in st.session_state
-    or not st.session_state.user_loaded_db_path
-    or "requirements" in str(st.session_state.user_loaded_db_path).lower()
-):
-    st.session_state.user_loaded_db_path = str(DEFAULT_STORAGE_FILE) if DEFAULT_STORAGE_FILE.is_file() else None
+if "candidate_profile_data" not in st.session_state:
+    st.session_state.candidate_profile_data = get_candidate_profile()
 
-if (
-    "active_db_path" not in st.session_state
-    or not st.session_state.active_db_path
-    or "requirements" in str(st.session_state.active_db_path).lower()
-):
-    st.session_state.active_db_path = str(DEFAULT_STORAGE_FILE)
+if "selected_body_template" not in st.session_state:
+    st.session_state.selected_body_template = "template1"
 
-if "memory_database" not in st.session_state or not st.session_state.memory_database:
-    if DEFAULT_STORAGE_FILE.is_file():
-        parsed_db, _ = load_database_from_location(DEFAULT_STORAGE_FILE)
-        st.session_state.memory_database = parsed_db
+if "body_version" not in st.session_state:
+    st.session_state.body_version = 0
+
+
+def apply_body_template(template_name: str) -> None:
+    """Synchronize the selected body template across sidebar, frontend buttons, and generic body."""
+    st.session_state.selected_body_template = template_name
+    cand_p = st.session_state.get("candidate_profile_data") or get_candidate_profile()
+    rendered = load_and_render_body_template(template_name, cand_p)
+    if rendered:
+        st.session_state.generic_body = rendered
+    st.session_state.body_version = st.session_state.get("body_version", 0) + 1
+
+
+# 3. Synchronized Subject Line and Generic Body
+if "subject_line" not in st.session_state:
+    cfg = get_email_config()
+    cfg_subj = cfg.get("subject", "")
+    st.session_state.subject_line = cfg_subj or "AI Engineer | Data Scientist | 3+ Years Experience"
+
+if "generic_body" not in st.session_state or not st.session_state.generic_body:
+    cand_p = st.session_state.get("candidate_profile_data") or get_candidate_profile()
+    rendered_body = load_and_render_body_template(st.session_state.selected_body_template, cand_p)
+    if rendered_body:
+        st.session_state.generic_body = rendered_body
     else:
-        st.session_state.memory_database = None
+        cfg = get_email_config()
+        st.session_state.generic_body = cfg.get("body_template", "")
 
+
+# Helper to sync updates to shared database
+def sync_database_update(email: str, sent_date: str) -> None:
+    """Synchronize an email record update across session state and Email_Storage.json on disk."""
+    clean_email = email.strip().lower()
+    if st.session_state.memory_database is None:
+        st.session_state.memory_database = {}
+    st.session_state.memory_database[clean_email] = sent_date
+    record_successful_send(clean_email, sent_date, custom_path=st.session_state.get("active_db_path"))
 
 
 # ---------------------------------------------------------------------------
-# Sidebar: Settings & Configuration
+# Sidebar: Settings & Configuration (Left Side)
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("### ⚙️ Sender & Email Settings")
@@ -155,7 +193,6 @@ with st.sidebar:
 
     sender_email = st.text_input("Gmail Address", value=email_cfg.get("sender_email", "javarahul04@gmail.com"))
     
-    # Requirement 1: Gmail App Password box with mandatory direct link
     sender_password = st.text_input(
         "Gmail App Password",
         type="password",
@@ -168,13 +205,33 @@ with st.sidebar:
         unsafe_allow_html=True
     )
 
-    subject_line = st.text_input("Subject Line", value=email_cfg.get("subject", "AI Engineer | Data Scientist | 3+ Years Experience"))
+    sidebar_subject = st.text_input("Subject Line", value=st.session_state.subject_line, key="sidebar_subject_line")
+    if sidebar_subject != st.session_state.subject_line:
+        st.session_state.subject_line = sidebar_subject
 
     col_lb1, col_lb2 = st.columns(2)
     with col_lb1:
         look_back = st.number_input("Look-back", min_value=0, max_value=365, value=int(email_cfg.get("look_back", 1)))
     with col_lb2:
         look_back_format = st.selectbox("Unit", ["months", "days", "years"], index=0)
+
+    # body_template selectbox (just like Unit button)
+    template_choices = ["template1", "template2", "template3", "template4", "template5"]
+    current_tmpl = st.session_state.get("selected_body_template", "template1")
+    current_tmpl_idx = template_choices.index(current_tmpl) if current_tmpl in template_choices else 0
+
+    selected_body_template = st.selectbox(
+        "body_template",
+        template_choices,
+        index=current_tmpl_idx,
+        key=f"sidebar_body_template_selector_{current_tmpl}",
+        help="Choose a generic template (template1 to template5). Placeholders are automatically replaced with candidate profile details.",
+    )
+
+    # Trigger body re-render whenever body_template selection changes
+    if selected_body_template != st.session_state.selected_body_template:
+        apply_body_template(selected_body_template)
+        st.rerun()
 
     st.markdown("---")
     st.markdown("### 📁 Resume & Storage Files")
@@ -184,7 +241,8 @@ with st.sidebar:
         st.caption(f"Path: `{Path(st.session_state.uploaded_resume_path).name}`")
 
     active_db_file = Path(st.session_state.active_db_path)
-    st.caption(f"Active Database: `{active_db_file.name}`")
+    current_stored_count = len(st.session_state.memory_database) if st.session_state.memory_database else 0
+    st.caption(f"Active Shared Database: `{active_db_file.name}` ({current_stored_count} contacts)")
     try:
         st.caption(f"Storage Directory: `{active_db_file.parent.relative_to(PROJECT_ROOT)}`")
     except ValueError:
@@ -195,7 +253,8 @@ with st.sidebar:
 # Top Header
 # ---------------------------------------------------------------------------
 st.markdown('<div class="main-title">📬 AI Job Search & Auto-Apply</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Personalized cold outreach with local LLM, automated validator, deduplication, and multi-format database manager.</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Personalized cold outreach with local LLM, automated validator, deduplication, and synchronized database manager.</div>', unsafe_allow_html=True)
+
 
 # ---------------------------------------------------------------------------
 # Main Tabs
@@ -219,13 +278,13 @@ with tab_chat:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # 1. Dedicated Resume Upload & Profile Extractor
-    with st.expander("📄 Upload Resume & Extract Candidate Profile", expanded=False):
+    # 1. Dedicated Resume Upload & Profile Extractor (Option to view and edit extracted details)
+    with st.expander("📄 Upload Resume & Extract Candidate Profile", expanded=True):
         uploaded_resume_file = st.file_uploader(
             "Upload Resume (PDF, Word, or TXT)",
             type=["pdf", "docx", "doc", "txt"],
             key="chat_resume_uploader",
-            help="Upload your resume in PDF, Word (.docx, .doc), or Text (.txt) format. The AI will parse and validate your candidate profile into candidate_profile.json.",
+            help="Upload your resume in PDF, Word (.docx, .doc), or Text (.txt) format. Candidate profile details will be extracted and can be reviewed or edited below.",
         )
 
         if uploaded_resume_file is not None:
@@ -245,6 +304,11 @@ with tab_chat:
                         )
                         saved_cfg = save_candidate_profile_config(parsed_profile)
                         st.session_state[cache_key] = parsed_profile.model_dump()
+                        st.session_state.candidate_profile_data = parsed_profile.model_dump()
+                        
+                        # Re-render current body_template with newly uploaded resume
+                        apply_body_template(st.session_state.selected_body_template)
+
                         method_used = getattr(parsed_profile, "extraction_method", "Regex Fallback")
                         if "LLM" in method_used:
                             st.success(f"🤖 **Profile Extracted via Pydantic LLM** for **{parsed_profile.name}**! Saved to `{saved_cfg.name}`.")
@@ -253,26 +317,93 @@ with tab_chat:
                     except Exception as err:
                         st.error(f"Error extracting resume profile: {err}")
 
-            if cache_key in st.session_state:
-                pdata = st.session_state[cache_key]
+        # Show extracted candidate profile details & provide option to edit details
+        pdata = st.session_state.get("candidate_profile_data") or {}
+        if pdata:
+            st.markdown("##### 👤 Extracted Candidate Profile Details")
+            tab_p_view, tab_p_edit = st.tabs(["👁️ View Profile Details", "✏️ Edit Profile Details"])
+
+            # View Details Tab
+            with tab_p_view:
                 col_p1, col_p2 = st.columns(2)
                 with col_p1:
-                    st.markdown(f"**Candidate:** `{pdata.get('name', 'N/A')}`")
+                    st.markdown(f"**Candidate Name:** `{pdata.get('name', 'N/A')}`")
                     st.markdown(f"**Current Role:** `{pdata.get('current_role', 'N/A')}`")
+                    st.markdown(f"**Previous Role:** `{pdata.get('previous_role') or 'Associate Data Scientist'}`")
                     st.markdown(f"**Experience:** `{pdata.get('experience_summary', 'N/A')}`")
                     st.caption(f"Extraction Mode: `{pdata.get('extraction_method', 'Auto-Extracted')}`")
                 with col_p2:
-                    st.markdown(f"**Education:** `{pdata.get('education', 'N/A')}`")
-                    st.markdown(f"**Skills Identified:** `{len(pdata.get('technical_skills', []))} skills`")
-                    st.markdown(f"**Projects Identified:** `{len(pdata.get('projects', []))} projects`")
+                    st.markdown(f"**Education:** `{pdata.get('education') or 'B.Tech / Science Degree'}`")
+                    skills_list = pdata.get("technical_skills") or []
+                    st.markdown(f"**Key Skills Identified:** ({len(skills_list)} items)")
+                    if skills_list:
+                        sample_skills = ", ".join(s.lstrip("•- ") for s in skills_list[:4])
+                        st.caption(f"{sample_skills}...")
+                    projects_list = pdata.get("projects") or []
+                    st.markdown(f"**Projects Identified:** ({len(projects_list)} items)")
+                    if projects_list:
+                        sample_projs = "; ".join(p.lstrip("•- ") for p in projects_list[:2])
+                        st.caption(f"{sample_projs}")
 
-    # 2. Database Location & Email Ingestion (Location instead of Upload Database File)
+                with st.expander("🔍 View Complete Extracted Skills & Projects", expanded=False):
+                    col_sk, col_pr = st.columns(2)
+                    with col_sk:
+                        st.markdown("**Technical Skills:**")
+                        for s in pdata.get("technical_skills", []):
+                            st.markdown(f"- {s.lstrip('•- ')}")
+                    with col_pr:
+                        st.markdown("**Key Projects:**")
+                        for p in pdata.get("projects", []):
+                            st.markdown(f"- {p.lstrip('•- ')}")
+
+            # Edit Details Tab
+            with tab_p_edit:
+                st.caption("You can modify the candidate details extracted from your resume below. Saving will immediately update your candidate profile, template placeholders, and system prompt.")
+                col_e1, col_e2 = st.columns(2)
+                with col_e1:
+                    inp_name = st.text_input("Candidate Name:", value=pdata.get("name", ""), key="edit_cand_name")
+                    inp_curr_role = st.text_input("Current Role / Title:", value=pdata.get("current_role", ""), key="edit_cand_role")
+                    inp_prev_role = st.text_input("Previous Role:", value=pdata.get("previous_role", ""), key="edit_cand_prev_role")
+                with col_e2:
+                    inp_exp = st.text_input("Experience Summary:", value=pdata.get("experience_summary", ""), key="edit_cand_exp")
+                    inp_edu = st.text_input("Education:", value=pdata.get("education", ""), key="edit_cand_edu")
+
+                raw_skills_val = "\n".join(s.lstrip("•- ") for s in pdata.get("technical_skills", []))
+                inp_skills = st.text_area("Technical Skills (one per line):", value=raw_skills_val, height=110, key="edit_cand_skills")
+
+                raw_projects_val = "\n".join(p.lstrip("•- ") for p in pdata.get("projects", []))
+                inp_projects = st.text_area("Key Projects (one per line):", value=raw_projects_val, height=100, key="edit_cand_projects")
+
+                if st.button("💾 Save Profile Changes", type="primary", key="save_profile_edits_btn"):
+                    updated_skills = [s.strip() for s in inp_skills.splitlines() if s.strip()]
+                    updated_projects = [p.strip() for p in inp_projects.splitlines() if p.strip()]
+
+                    new_profile = CandidateProfile(
+                        name=inp_name.strip(),
+                        current_role=inp_curr_role.strip(),
+                        previous_role=inp_prev_role.strip(),
+                        experience_summary=inp_exp.strip(),
+                        education=inp_edu.strip(),
+                        technical_skills=updated_skills,
+                        projects=updated_projects,
+                        extraction_method="User-Edited",
+                    )
+                    save_candidate_profile_config(new_profile)
+                    st.session_state.candidate_profile_data = new_profile.model_dump()
+                    
+                    # Update body with new placeholders using current selected_body_template
+                    apply_body_template(st.session_state.selected_body_template)
+
+                    st.success("✅ Profile changes saved! Body placeholders and system prompt updated with your details.")
+                    st.rerun()
+
+    # 2. Database Location & Email Ingestion
     with st.expander("📍 Recipient Database Location & Email Ingestion", expanded=True):
         st.write("Specify your database file location (.json, .csv, .xlsx, .txt) or add emails and job descriptions below.")
 
         col_db_loc, col_db_paste = st.columns([1, 1])
 
-        # 2.1 Location of the Database File (Requirement: Button to navigate and choose file location & load into memory)
+        # 2.1 Location of the Database File
         with col_db_loc:
             st.markdown("##### 📍 Database File Location & Navigation")
 
@@ -282,7 +413,7 @@ with tab_chat:
                 value=default_loc_text,
                 placeholder="e.g. Email_Storage.json, Email_Storage.csv, or full path",
                 key="chat_db_loc_input",
-                help="Enter path or click 'Navigate & Choose File' below to browse."
+                help="Enter path or click 'Browse File' below to browse."
             )
 
             col_btn_nav, col_btn_load, col_btn_reset = st.columns([1, 1, 1])
@@ -385,10 +516,10 @@ with tab_chat:
                         st.session_state.memory_database = parsed_db
                         st.caption(f"🧠 **In-Memory Ready:** `{cand_path.name}` ({len(parsed_db)} emails loaded)")
             else:
-                st.caption("ℹ️ Click **'🗂️ Navigate & Choose File'** or **'📂 Load from Location'** to load recipient emails into memory.")
+                st.caption("ℹ️ Click **'🗂️ Browse File'** or **'📂 Load Location'** to load recipient emails into memory.")
 
 
-        # 2.2 Box: Add Email(s) / Paste Job Description Script (Extract -> Backup in same location -> Add to DB in same location)
+        # 2.2 Box: Add Email(s) / Paste Job Description Script
         with col_db_paste:
             st.markdown("##### ✍️ Add Email(s) / Paste Job Description Script")
             quick_script_input = st.text_area(
@@ -397,7 +528,6 @@ with tab_chat:
                 height=130,
                 key="chat_quick_script_box",
             )
-
             col_add_btn, _ = st.columns([2, 1])
             with col_add_btn:
                 extract_btn_clicked = st.button("➕ Extract & Add to Database", type="primary", use_container_width=True)
@@ -423,11 +553,11 @@ with tab_chat:
                         if res["valid_scraped"] > 0:
                             backup_name = Path(res['timestamped_file']).name if res['timestamped_file'] else ""
                             backup_info = f" | Backup saved in same directory: `{backup_name}`" if backup_name else ""
-                            st.success(f"✅ Extracted **{res['valid_scraped']}** valid emails! Added **{res['added_count']}** new unique addresses into `{target_db_dest.name}` at `{target_db_dest.parent}` (Total in DB: **{res['total_in_db']}**){backup_info}.")
+                            st.success(f"✅ Extracted **{res['valid_scraped']}** valid emails! Added **{res['added_count']}** new unique addresses into `{target_db_dest.name}` (Total in DB: **{res['total_in_db']}**){backup_info}.")
                         else:
                             st.info("No valid email addresses found in the input text.")
 
-        # Export & Download Section (Saves snapshots & backup directly in database directory without asking)
+        # Export & Download Section
         st.markdown("###### 💾 Export & Download Current Database:")
         active_target_loc = st.session_state.user_loaded_db_path or str(DEFAULT_STORAGE_FILE)
         active_path_obj = resolve_database_path(active_target_loc)
@@ -467,49 +597,37 @@ with tab_chat:
 
     st.markdown("---")
 
-    # 3. Outreach Message Body: "Add a generic body"
+    # 3. Outreach Message Body (Dynamically synchronized with body_template & candidate profile)
     st.markdown("#### 📝 Outreach Message Body")
+
+    # Dynamic template switcher right above "Add a generic body"
+    st.caption("Select template (dynamically synchronized with sidebar and profile placeholders):")
+    tmpl_cols = st.columns(5)
+    for i, t_name in enumerate(["template1", "template2", "template3", "template4", "template5"]):
+        with tmpl_cols[i]:
+            is_active = (t_name == st.session_state.selected_body_template)
+            btn_type = "primary" if is_active else "secondary"
+            if st.button(f"📄 {t_name}", key=f"tab1_btn_{t_name}", type=btn_type, use_container_width=True):
+                apply_body_template(t_name)
+                st.rerun()
+
+    text_area_key = f"tab1_user_body_input_v{st.session_state.get('body_version', 0)}"
     user_body_input = st.text_area(
         label="Add a generic body",
         value=st.session_state.generic_body,
-        placeholder="Add a generic body...",
-        height=190,
-        help="This generic body will be tailored by the LLM for each recipient. If no LLM is detected, this body is used as the safe fallback.",
+        placeholder="Add or edit your outreach body...",
+        height=220,
+        key=text_area_key,
+        help="This body will be sent to recruiters (or further personalized by the local LLM if online). You can edit any part of it before sending.",
     )
 
     if user_body_input != st.session_state.generic_body:
         st.session_state.generic_body = user_body_input
 
-    # Preview & Target Selection Logic (Fully Dynamic & Frontend-Controlled)
-    db_contacts = {}
-    db_source_name = ""
+    # Preview & Target Selection Logic (Synchronized with Shared Database)
+    db_contacts = st.session_state.memory_database or {}
+    db_source_name = Path(st.session_state.user_loaded_db_path or DEFAULT_STORAGE_FILE).name
 
-    # 1. Check in-memory database
-    if st.session_state.get("memory_database") and len(st.session_state.memory_database) > 0:
-        db_contacts = st.session_state.memory_database
-        user_p = st.session_state.get("user_loaded_db_path")
-        if user_p and "requirements" not in str(user_p).lower():
-            db_source_name = Path(user_p).name
-        else:
-            db_source_name = DEFAULT_STORAGE_FILE.name
-    elif st.session_state.get("user_loaded_db_path") and Path(st.session_state.user_loaded_db_path).is_file():
-        cand_path = resolve_database_path(st.session_state.user_loaded_db_path)
-        if "requirements" not in cand_path.name.lower():
-            loaded_data, _ = load_database_from_location(cand_path)
-            if loaded_data:
-                db_contacts = loaded_data
-                db_source_name = cand_path.name
-
-    # 2. Fallback to default Email_Storage.json if custom selection has 0 emails
-    if not db_contacts and DEFAULT_STORAGE_FILE.is_file():
-        default_data, _ = load_database_from_location(DEFAULT_STORAGE_FILE)
-        if default_data:
-            db_contacts = default_data
-            db_source_name = DEFAULT_STORAGE_FILE.name
-            st.session_state.memory_database = default_data
-            st.session_state.user_loaded_db_path = str(DEFAULT_STORAGE_FILE)
-
-    # 3. Check pasted script / job description text box
     cached_pasted = quick_script_input.strip() if quick_script_input else st.session_state.get("last_ingested_text_cache", "")
     pasted_contacts = sorted(list(set(extract_emails_from_text(cached_pasted)))) if cached_pasted else []
 
@@ -555,11 +673,13 @@ with tab_chat:
     if send_btn:
         recipients_list = current_target_emails
         send_source_label = target_mode_desc
+        active_subject = st.session_state.subject_line
+        active_body = st.session_state.generic_body
 
         if not sender_email or not sender_password:
             st.error("Please provide both your **Gmail Address** and **App Password** in the sidebar.")
-        elif not user_body_input.strip():
-            st.error("Please enter a generic body before sending.")
+        elif not active_body.strip():
+            st.error("Please enter or select an email body template before sending.")
         elif not st.session_state.uploaded_resume_path or not Path(st.session_state.uploaded_resume_path).is_file():
             st.error("Please upload or select a valid resume file (PDF, Word, or TXT).")
         elif not recipients_list:
@@ -567,10 +687,8 @@ with tab_chat:
         else:
             st.session_state.chat_messages.append({
                 "role": "user",
-                "content": f"🚀 **Start Automatic Outreach** | Target: {len(recipients_list)} emails ({send_source_label}) | Subject: *'{subject_line}'*"
+                "content": f"🚀 **Start Automatic Outreach** | Target: {len(recipients_list)} emails ({send_source_label}) | Subject: *'{active_subject}'*"
             })
-
-
 
             # Real-time streaming output container
             stream_container = st.container()
@@ -588,14 +706,15 @@ with tab_chat:
                 try:
                     stream_generator = run_email_batch_stream(
                         list_of_emails=recipients_list,
-                        subject=subject_line,
-                        body=user_body_input,
+                        subject=active_subject,
+                        body=active_body,
                         sender_email=sender_email,
                         sender_password=sender_password,
                         attachments=st.session_state.uploaded_resume_path,
                         look_back=look_back,
                         look_back_format=look_back_format,
                         system_prompt=custom_sys_prompt,
+                        custom_db_path=st.session_state.get("active_db_path"),
                     )
 
                     curr_state = {}
@@ -611,7 +730,7 @@ with tab_chat:
                             st.markdown(f"#### 🔄 [{s['index']}/{s['total']}] Processing email: `{s['email']}`")
                             st.markdown(f"**From**: `{s['sender']}` ➡️ **To**: `{s['email']}` | **Subject**: *'{s['subject']}'*")
                             
-                            with st.expander("📄 This is the generic body", expanded=False):
+                            with st.expander("📄 This is the template body", expanded=False):
                                 st.text(s["gen_body"])
 
                             mode = s.get("mode")
@@ -621,20 +740,20 @@ with tab_chat:
                                     st.text(s["ai_body"])
                             elif mode == "llm_unavailable":
                                 reason = s.get("reason", "No LLM detected")
-                                st.warning(f"⚠️ **Oops, sorry! No LLM detected.** ({reason})\n\nSwitching to the generic body...")
+                                st.warning(f"⚠️ **Oops, sorry! No LLM detected.** ({reason})\n\nSwitching to the template body...")
                                 with st.expander("📄 This is the body (Fallback)", expanded=True):
                                     st.text(s["ai_body"])
                             elif mode == "llm_incomplete_fallback":
                                 reason = s.get("reason", "Incomplete email detected")
-                                st.warning(f"⚠️ **Incomplete / Defective email detected.** ({reason})\n\nApplying robust fallback: Switching to generic body with personalized salutation & closing.")
-                                with st.expander("📄 This is the generic body (Fallback Applied)", expanded=True):
+                                st.warning(f"⚠️ **Incomplete / Defective email detected.** ({reason})\n\nApplying robust fallback: Switching to template body with personalized salutation & closing.")
+                                with st.expander("📄 This is the body (Fallback Applied)", expanded=True):
                                     st.text(s["ai_body"])
 
                             status = s.get("status")
                             if status == "sending":
                                 st.caption(f"📤 Sending email to `{s['email']}`...")
                             elif status == "sent":
-                                st.success(f"✅ **Email sent successfully to `{s['email']}`!**")
+                                st.success(f"✅ **Email sent successfully to `{s['email']}`! Immediately updated Email_Storage.json.**")
                                 st.write(f"⏳ **Remaining email(s) left:** `{s.get('remaining', 0)}`")
                             elif status and status.startswith("failed"):
                                 st.error(f"❌ **Failed to send email to `{s['email']}` ({status}).**")
@@ -724,6 +843,10 @@ with tab_chat:
                             if is_succ:
                                 sent_total += 1
                                 curr_state["status"] = "sent"
+                                sent_date_val = event.get("sent_date") or datetime.now().strftime("%Y-%m-%d")
+                                
+                                # Immediately update shared database in memory and on disk
+                                sync_database_update(target_e, sent_date_val)
                             else:
                                 failed_total += 1
                                 curr_state["status"] = f"failed: {status}"
@@ -732,11 +855,11 @@ with tab_chat:
                             _render_active_card(active_card_placeholder, curr_state)
 
                             # Record in live audit log
-                            mode_label = "🤖 AI Personalized" if curr_state.get("mode") == "llm_success" else "📄 Generic Fallback"
+                            mode_label = "🤖 AI Personalized" if curr_state.get("mode") == "llm_success" else "📄 Template Fallback"
                             processed_log.append({
                                 "#": idx,
                                 "Recipient Email": target_e,
-                                "Subject": curr_state.get("subject", subject_line),
+                                "Subject": curr_state.get("subject", active_subject),
                                 "Status": "✅ Sent" if is_succ else f"❌ {status}",
                                 "Mode": mode_label,
                             })
@@ -746,7 +869,7 @@ with tab_chat:
                                 f"**Processed:** `{idx}/{tot}` | **Sent:** `{sent_total}` | **Failed:** `{failed_total}` | **Remaining:** `{rem_left}`"
                             )
 
-                            # Update live audit log table (scrollable dataframe)
+                            # Update live audit log table
                             log_df = pd.DataFrame(processed_log)
                             log_table_placeholder.dataframe(log_df, use_container_width=True, height=220)
 
@@ -763,6 +886,7 @@ with tab_chat:
 - **Successfully Sent**: `{s_cnt}`
 - **Skipped (Already Contacted)**: `{sk_cnt}`
 - **Failed**: `{f_cnt}`
+- **Database Status**: `Email_Storage.json` synchronized immediately!
 """
                             st.balloons()
                             st.markdown(summary_msg)
@@ -781,16 +905,17 @@ with tab_chat:
 # ===========================================================================
 with tab_prompt_inspect:
     st.markdown("### 🔍 Subject, Body & Dynamic System Prompt")
-    st.write("Inspect and dynamically configure the outreach subject, generic body, and the system prompt governing your local reasoning model.")
+    st.write("Inspect and dynamically configure the outreach subject, selected template body, and the system prompt governing your local reasoning model.")
 
     col_chk1, col_chk2 = st.columns(2)
 
-    # 1. Subject Line Check (Requirement 3: current subject line)
+    # 1. Subject Line Check (Synchronized with current subject)
     with col_chk1:
         st.markdown("#### 1️⃣ Dynamic Subject Line")
-        st.markdown(f"**Current Subject Line:** `{subject_line}`")
-        s_len = len(subject_line.strip())
-        s_words = len(subject_line.strip().split())
+        active_subj = st.session_state.subject_line
+        st.markdown(f"**Current Subject Line:** `{active_subj}`")
+        s_len = len(active_subj.strip())
+        s_words = len(active_subj.strip().split())
 
         if s_len == 0:
             st.error("❌ Subject line is empty.")
@@ -801,12 +926,13 @@ with tab_prompt_inspect:
         else:
             st.success(f"✅ Subject line length is optimal ({s_len} chars, {s_words} words).")
 
-    # 2. General Body Quality Check (Requirement 3: current body)
+    # 2. General Body Quality Check (Synchronized with current body)
     with col_chk2:
-        st.markdown("#### 2️⃣ General Body Quality Validation")
+        st.markdown("#### 2️⃣ Body Quality Validation")
         curr_body = st.session_state.generic_body
         body_words = len(curr_body.strip().split())
-        body_report = email_validator.validate(curr_body, recipient_name="Recruiter")
+        cand_name = (st.session_state.get("candidate_profile_data") or {}).get("name", "Rahul Singh")
+        body_report = email_validator.validate(curr_body, recipient_name="Recruiter", candidate_name=cand_name)
 
         if body_report.is_valid:
             st.success(f"✅ Current body passed quality check ({body_words} words). Has proper greeting, closing, and candidate signature.")
@@ -817,37 +943,12 @@ with tab_prompt_inspect:
 
     st.markdown("---")
 
-    # 3. Sender and Receiver Email Only (Requirement 3: then it should show the email of the sender and receiver only)
+    # 3. Sender and Receiver Email Only (Synchronized with Shared Database)
     st.markdown("#### 📬 Sender & Receiver Email Details")
 
-    # Determine current receivers (from in-memory loaded db, or fallback to pasted job description, or default Email_Storage.json)
-    current_rec_list = []
-    rec_source_tag = "no recipients loaded yet"
-
-    if st.session_state.get("memory_database") and len(st.session_state.memory_database) > 0:
-        current_rec_list = list(st.session_state.memory_database.keys())
-        user_p = st.session_state.get("user_loaded_db_path")
-        loaded_name = Path(user_p).name if user_p and "requirements" not in str(user_p).lower() else DEFAULT_STORAGE_FILE.name
-        rec_source_tag = f"from in-memory database `{loaded_name}`"
-    elif st.session_state.get("user_loaded_db_path") and Path(st.session_state.user_loaded_db_path).is_file():
-        cand_p = resolve_database_path(st.session_state.user_loaded_db_path)
-        if "requirements" not in cand_p.name.lower():
-            rec_db, _ = load_database_from_location(cand_p)
-            if rec_db:
-                current_rec_list = list(rec_db.keys())
-                rec_source_tag = f"from loaded database `{cand_p.name}`"
-
-    if not current_rec_list:
-        cached_p = st.session_state.get("last_ingested_text_cache", "")
-        extracted_p = sorted(list(set(extract_emails_from_text(cached_p)))) if cached_p else []
-        if extracted_p:
-            current_rec_list = extracted_p
-            rec_source_tag = "from pasted job description / email section"
-        elif DEFAULT_STORAGE_FILE.is_file():
-            fallback_db, _ = load_database_from_location(DEFAULT_STORAGE_FILE)
-            if fallback_db:
-                current_rec_list = list(fallback_db.keys())
-                rec_source_tag = f"from default database `{DEFAULT_STORAGE_FILE.name}`"
+    shared_db = st.session_state.memory_database or {}
+    current_rec_list = list(shared_db.keys())
+    rec_source_tag = f"from shared database `Email_Storage.json` ({len(current_rec_list)} contacts)"
 
     col_sr1, col_sr2 = st.columns(2)
     with col_sr1:
@@ -861,15 +962,13 @@ with tab_prompt_inspect:
 
     st.markdown("---")
 
-
-    # 3. Dynamic System Prompt with candidate_profile.json Access (Requirement 4)
+    # 4. Dynamic System Prompt with candidate_profile.json Access
     st.markdown("#### 3️⃣ System Prompt for Local LLM (DeepSeek-R1 / Ollama)")
     st.write("If no custom prompt is supplied, the system automatically uses the **Generic System Prompt** generated dynamically from `candidate_profile.json`.")
 
     generic_prompt_dynamic = build_generic_system_prompt()
     saved_sys_prompt = model_cfg.get("system_prompt", "")
 
-    # Choose whether to show custom or generic
     col_p_opts1, col_p_opts2 = st.columns([3, 1])
     with col_p_opts2:
         if st.button("🔄 Reset to Generic Prompt", use_container_width=True):
@@ -897,134 +996,110 @@ with tab_prompt_inspect:
 
 
 # ===========================================================================
-# TAB 3: Database Manager (Modify & Delete Only - Requirement 4)
+# TAB 3: Database Manager (Modify & Delete - Synchronized with Shared Database)
 # ===========================================================================
 with tab_db:
     st.markdown("### 🗄️ Database Manager — Modify & Delete")
 
-    user_loaded_path = st.session_state.get("user_loaded_db_path")
+    # Use the shared database as single source of truth across all sections
+    active_db = st.session_state.memory_database or {}
+    active_db_target = Path(st.session_state.user_loaded_db_path or DEFAULT_STORAGE_FILE)
+    st.info(f"📂 Currently managing shared database: `{DEFAULT_STORAGE_FILE.name}` ({len(active_db)} contacts)")
 
-    # Requirement 4: If the user does not load/upload the database in Tab 1, modify & delete should not work!
-    if not user_loaded_path or not Path(user_loaded_path).is_file() or "requirements" in str(user_loaded_path).lower():
-        st.warning(
-            "⚠️ **Modification and deletion are disabled.**\n\n"
-            "No database file has been loaded from location in the **Chat & Auto-Email** section. "
-            "To enable modification and deletion, please go to Tab 1 (**💬 Chat & Auto-Email**) and use **'📂 Load from Location'** to select a database file."
-        )
-    else:
-        active_db_target = Path(user_loaded_path)
-        st.info(f"📂 Currently managing loaded database: `{active_db_target}`")
+    all_emails = list(active_db.keys())
+    col_mod, col_del = st.columns(2)
 
-        active_db = st.session_state.memory_database if st.session_state.get("memory_database") else load_email_database(active_db_target)
-        all_emails = list(active_db.keys())
-
-        col_mod, col_del = st.columns(2)
-
-        # 1. Modify Existing Record
-        with col_mod:
-            st.markdown("#### ✏️ Modify Contact Record")
-            if not all_emails:
-                st.info("Loaded database is currently empty.")
-            else:
-                selected_edit_email = st.selectbox("Select email to modify:", options=all_emails, key="mod_select_email")
-                current_date_val = active_db.get(selected_edit_email, "")
-
-                new_email_val = st.text_input("Email Address:", value=selected_edit_email, key="mod_email_val")
-                new_date_val = st.text_input("Last Contacted Date (YYYY-MM-DD or leave blank):", value=current_date_val, key="mod_date_val")
-
-                if st.button("💾 Update Contact in Database", key="mod_save_btn", type="primary"):
-                    if not is_valid_email(new_email_val):
-                        st.error("Please enter a valid email address.")
-                    else:
-                        updated_db = update_email_in_database(
-                            active_db,
-                            old_email=selected_edit_email,
-                            new_email=new_email_val,
-                            new_date=new_date_val,
-                        )
-                        save_email_database(updated_db, active_db_target)
-                        st.session_state.memory_database = updated_db
-                        st.success(f"Contact updated successfully in `{active_db_target.name}`!")
-                        st.rerun()
-
-        # 2. Delete Record(s)
-        with col_del:
-            st.markdown("#### 🗑️ Delete Contact Record(s)")
-            if not all_emails:
-                st.info("No records to delete.")
-            else:
-                selected_to_delete = st.multiselect(
-                    "Select email(s) to remove:",
-                    options=all_emails,
-                    key="del_multiselect"
-                )
-
-                delete_scrape_text = st.text_area(
-                    "Or paste text/script to scrape and remove matching emails:",
-                    placeholder="Paste emails or text containing addresses you want removed...",
-                    height=90,
-                    key="del_text_area",
-                )
-
-                if st.button("🗑️ Delete Selected Contacts", type="secondary", key="del_action_btn"):
-                    targets = set(selected_to_delete)
-                    if delete_scrape_text.strip():
-                        targets.update(extract_emails_from_text(delete_scrape_text))
-
-                    if not targets:
-                        st.warning("No emails selected or found in text to delete.")
-                    else:
-                        updated_db, count_deleted = delete_emails_from_database(active_db, list(targets))
-                        save_email_database(updated_db, active_db_target)
-                        st.session_state.memory_database = updated_db
-                        st.success(f"Deleted **{count_deleted}** contact(s) from `{active_db_target.name}`.")
-                        st.rerun()
-
-        st.markdown("---")
-        st.markdown(f"#### 📋 Current Database Table: `{active_db_target.name}`")
-        if active_db:
-            df_display = pd.DataFrame([
-                {"#": i + 1, "Email": k, "Domain": k.split("@")[-1] if "@" in k else "unknown", "Last Contacted Date": v or "Never Contacted"}
-                for i, (k, v) in enumerate(active_db.items())
-            ])
-            st.dataframe(df_display, use_container_width=True, height=280)
+    # 1. Modify Existing Record
+    with col_mod:
+        st.markdown("#### ✏️ Modify Contact Record")
+        if not all_emails:
+            st.info("Shared database is currently empty.")
         else:
-            st.info("The database is currently empty.")
+            selected_edit_email = st.selectbox("Select email to modify:", options=all_emails, key="mod_select_email")
+            current_date_val = active_db.get(selected_edit_email, "")
+
+            new_email_val = st.text_input("Email Address:", value=selected_edit_email, key="mod_email_val")
+            new_date_val = st.text_input("Last Contacted Date (YYYY-MM-DD or leave blank):", value=current_date_val, key="mod_date_val")
+
+            if st.button("💾 Update Contact in Database", key="mod_save_btn", type="primary"):
+                if not is_valid_email(new_email_val):
+                    st.error("Please enter a valid email address.")
+                else:
+                    updated_db = update_email_in_database(
+                        active_db,
+                        old_email=selected_edit_email,
+                        new_email=new_email_val,
+                        new_date=new_date_val,
+                    )
+                    # Save immediately to Email_Storage.json and update session state
+                    save_email_database(updated_db, DEFAULT_STORAGE_FILE)
+                    if active_db_target.resolve() != DEFAULT_STORAGE_FILE.resolve():
+                        save_email_database(updated_db, active_db_target)
+                    st.session_state.memory_database = updated_db
+                    st.success(f"Contact updated successfully in `{DEFAULT_STORAGE_FILE.name}`!")
+                    st.rerun()
+
+    # 2. Delete Record(s)
+    with col_del:
+        st.markdown("#### 🗑️ Delete Contact Record(s)")
+        if not all_emails:
+            st.info("No records to delete.")
+        else:
+            selected_to_delete = st.multiselect(
+                "Select email(s) to remove:",
+                options=all_emails,
+                key="del_multiselect"
+            )
+
+            delete_scrape_text = st.text_area(
+                "Or paste text/script to scrape and remove matching emails:",
+                placeholder="Paste emails or text containing addresses you want removed...",
+                height=90,
+                key="del_text_area",
+            )
+
+            if st.button("🗑️ Delete Selected Contacts", type="secondary", key="del_action_btn"):
+                targets = set(selected_to_delete)
+                if delete_scrape_text.strip():
+                    targets.update(extract_emails_from_text(delete_scrape_text))
+
+                if not targets:
+                    st.warning("No emails selected or found in text to delete.")
+                else:
+                    updated_db, count_deleted = delete_emails_from_database(active_db, list(targets))
+                    # Save immediately to Email_Storage.json and update session state
+                    save_email_database(updated_db, DEFAULT_STORAGE_FILE)
+                    if active_db_target.resolve() != DEFAULT_STORAGE_FILE.resolve():
+                        save_email_database(updated_db, active_db_target)
+                    st.session_state.memory_database = updated_db
+                    st.success(f"Deleted **{count_deleted}** contact(s) from `{DEFAULT_STORAGE_FILE.name}`.")
+                    st.rerun()
+
+    st.markdown("---")
+    st.markdown(f"#### 📋 Current Shared Database Table: `{DEFAULT_STORAGE_FILE.name}`")
+    if active_db:
+        df_display = pd.DataFrame([
+            {"#": i + 1, "Email": k, "Domain": k.split("@")[-1] if "@" in k else "unknown", "Last Contacted Date": v or "Never Contacted"}
+            for i, (k, v) in enumerate(active_db.items())
+        ])
+        st.dataframe(df_display, use_container_width=True, height=280)
+    else:
+        st.info("The database is currently empty.")
 
 
 # ===========================================================================
-# TAB 4: Domain-Wise Email Viewer (Requirement 5)
+# TAB 4: Domain-Wise Email Viewer (Search by full email or domain)
 # ===========================================================================
 with tab_domains:
     st.markdown("### 🌐 Domain-Wise Email Viewer & Advanced Analytics")
-    st.write("Analyze and manage your recruiter network grouped by company domain.")
+    st.write("Analyze and manage your recruiter network grouped by company domain. Synchronized in real-time with `Email_Storage.json`.")
 
-    user_loaded_path = st.session_state.get("user_loaded_db_path")
-    if st.session_state.get("memory_database"):
-        db_for_domains = st.session_state.memory_database
-        active_db_target = Path(user_loaded_path) if user_loaded_path and "requirements" not in str(user_loaded_path).lower() else resolve_database_path()
-        view_source_desc = f"in-memory database `{active_db_target.name}`"
-    elif user_loaded_path and Path(user_loaded_path).is_file() and "requirements" not in str(user_loaded_path).lower():
-        active_db_target = Path(user_loaded_path)
-        db_for_domains, _ = load_database_from_location(active_db_target)
-        view_source_desc = f"loaded database `{active_db_target.name}`"
-    else:
-        cached_text = st.session_state.get("last_ingested_text_cache", "")
-        pasted_emails = sorted(list(set(extract_emails_from_text(cached_text))))
-        if pasted_emails:
-            active_db_target = resolve_database_path()
-            db_for_domains = {e: "" for e in pasted_emails}
-            view_source_desc = "pasted job description / email section"
-        else:
-            active_db_target = None
-            db_for_domains = {}
-            view_source_desc = ""
-
+    # Synchronized with shared database
+    db_for_domains = st.session_state.memory_database or {}
 
     if not db_for_domains:
-        st.info("ℹ️ No database uploaded or loaded yet in the **Chat & Auto-Email** section. Please load a database file from location or paste job descriptions in Tab 1.")
+        st.info("ℹ️ No emails in database. Please add emails or load a database file in Tab 1.")
     else:
-        st.caption(f"Showing domain analytics for **{len(db_for_domains)}** emails from **{view_source_desc}**.")
         stats = get_domain_statistics(db_for_domains)
         grouped = stats["grouped"]
 
@@ -1035,15 +1110,19 @@ with tab_domains:
         col_m3.metric("Contacted", stats["contacted_count"])
         col_m4.metric("Pending / Never Contacted", stats["uncontacted_count"])
 
-        # 2. Domain Search & Bulk Domain Actions
+        # 2. Domain & Email Search
         st.markdown("#### 🔍 Filter & Domain Operations")
         col_d_search, col_d_export = st.columns([3, 2])
 
         with col_d_search:
-            search_domain = st.text_input("Filter by domain name:", placeholder="e.g. capgemini.com, in.ey.com, fractal.ai", key="domain_filter_bar")
+            search_query = st.text_input(
+                "Filter by email address or domain name:",
+                placeholder="e.g. akash.sirohi@hireoneshot.com, capgemini.com, @fractal.ai, or name",
+                key="domain_filter_bar",
+                help="Search by full email address, username/prefix, domain name, or domain with @"
+            )
 
         with col_d_export:
-            # Export all domain grouped contacts
             all_domain_csv = export_email_database(db_for_domains, "csv")
             st.download_button("📥 Export All Domains (CSV)", data=all_domain_csv, file_name="domains_all.csv", mime="text/csv")
 
@@ -1060,8 +1139,7 @@ with tab_domains:
             with col_c1:
                 if st.button("✅ Yes, Delete Permanently", type="primary", key="confirm_del_btn"):
                     updated_db, count = delete_emails_from_database(db_for_domains, [target_del])
-                    if active_db_target:
-                        save_email_database(updated_db, active_db_target)
+                    save_email_database(updated_db, DEFAULT_STORAGE_FILE)
                     st.session_state.memory_database = updated_db
                     st.session_state.pending_delete_email = None
                     st.success(f"Deleted `{target_del}` successfully!")
@@ -1085,16 +1163,12 @@ with tab_domains:
             with col_dc1:
                 if st.button("✅ Yes, Delete Entire Domain", type="primary", key="confirm_del_dom_btn"):
                     updated_db, count = delete_domain_from_database(db_for_domains, target_del_dom)
-                    if active_db_target:
-                        save_email_database(updated_db, active_db_target)
+                    save_email_database(updated_db, DEFAULT_STORAGE_FILE)
                     st.session_state.memory_database = updated_db
                     st.session_state.pending_delete_domain = None
                     st.success(f"Deleted {count} contacts from `@{target_del_dom}`!")
                     st.rerun()
-
             with col_dc2:
-
-
                 if st.button("❌ Cancel Domain Delete", key="cancel_del_dom_btn"):
                     st.session_state.pending_delete_domain = None
                     st.rerun()
@@ -1102,14 +1176,15 @@ with tab_domains:
         st.markdown("---")
         st.markdown("#### 🏢 Company Domains")
 
-        # 5. Render Domains and Contacts
-        filtered_domains = {
-            d: lst for d, lst in grouped.items()
-            if not search_domain.strip() or search_domain.strip().lower() in d.lower()
-        }
+        # 5. Filter domains using filter_grouped_domains
+        filtered_domains = filter_grouped_domains(grouped, search_query)
+
+        if search_query.strip():
+            matched_emails_total = sum(len(elst) for elst in filtered_domains.values())
+            st.info(f"🔍 Search results for **'{search_query.strip()}'**: Found **{len(filtered_domains)}** matching domain(s) and **{matched_emails_total}** matching email(s).")
 
         if not filtered_domains:
-            st.info("No domains match your search query.")
+            st.info("No email addresses or domains match your search query.")
         else:
             for domain, emails in filtered_domains.items():
                 contacted_in_dom = sum(1 for e in emails if e["last_sent"] != "Never")

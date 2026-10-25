@@ -8,7 +8,7 @@ dispatches emails, and yields streaming progress updates.
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Generator, Dict, Any, List, Optional
+from typing import Generator, Dict, Any, List, Optional, Union
 
 from ai_email_writer.generator import (
     generate_professional_email,
@@ -69,6 +69,7 @@ def run_email_batch_stream(
     look_back: int = LOOK_BACK,
     look_back_format: str = LOOK_BACK_FORMAT,
     system_prompt: Optional[str] = None,
+    custom_db_path: Optional[Union[str, Path]] = None,
 ) -> Generator[Dict[str, Any], None, List[Dict[str, Any]]]:
     """
     Streaming generator for batch outreach:
@@ -271,6 +272,7 @@ def run_email_batch_stream(
                 attachments=attachments,
                 look_back=look_back,
                 look_back_format=look_back_format,
+                custom_db_path=custom_db_path,
             )
             status = "sent_ai" if (success and used_llm) else ("sent_fallback" if success else "failed")
         except Exception as send_err:
@@ -286,6 +288,7 @@ def run_email_batch_stream(
         })
 
         # 5. Yield email completion status with remaining count
+        sent_date_str = datetime.now().strftime("%Y-%m-%d") if success else None
         yield {
             "event": "email_complete",
             "index": index,
@@ -293,6 +296,7 @@ def run_email_batch_stream(
             "email": email,
             "status": status,
             "success": success,
+            "sent_date": sent_date_str,
             "remaining_emails_left": remaining_left,
         }
 
@@ -318,6 +322,7 @@ def run_email_batch(
     look_back: int = LOOK_BACK,
     look_back_format: str = LOOK_BACK_FORMAT,
     system_prompt: Optional[str] = None,
+    custom_db_path: Optional[Union[str, Path]] = None,
 ) -> List[Dict[str, Any]]:
     """Non-streaming wrapper for run_email_batch_stream (used by CLI and tests)."""
     stream = run_email_batch_stream(
@@ -330,6 +335,7 @@ def run_email_batch(
         look_back=look_back,
         look_back_format=look_back_format,
         system_prompt=system_prompt,
+        custom_db_path=custom_db_path,
     )
     final_results = []
     for event in stream:
