@@ -41,3 +41,16 @@ __pycache__/
 *.dot
 *.dotx
 *.dotm
+
+# Python packaging and build artifacts
+.eggs/
+wheels/
+pip-wheel-metadata/
+# Python caches
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+env/
+# Launcher configuration backups
+.launcher-config-backup-*/
