@@ -15,8 +15,8 @@ def send_email(
     sender_email: str,
     sender_password: str,
     attachments=None,
-    look_back: int = 0,
-    look_back_format: str = "day",
+    look_back: int = 1,
+    look_back_format: str = "months",
     custom_db_path: Optional[Union[str, Path]] = None,
 ) -> bool:
     """

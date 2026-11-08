@@ -2,7 +2,16 @@ import re
 from email.utils import parseaddr
 from config_loader import get_generic_email_prefixes
 
-GENERIC_EMAIL_NAMES = set(get_generic_email_prefixes())
+
+def _get_generic_names() -> set:
+    """Load generic email prefixes lazily to avoid import-time config read."""
+    try:
+        return set(get_generic_email_prefixes())
+    except Exception:
+        return set()
+
+
+GENERIC_EMAIL_NAMES: set = _get_generic_names()
 
 
 def clean_name_token(token: str) -> str:

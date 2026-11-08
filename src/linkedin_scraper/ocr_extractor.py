@@ -69,7 +69,7 @@ def extract_emails_from_image(
     Returns list of unique valid emails found.
     """
     reader = get_ocr_reader(ocr_cfg)
-    img_array = np.array(image)
+    img_array = np.array(image.convert("RGB"))
 
     results = reader.readtext(
         img_array,

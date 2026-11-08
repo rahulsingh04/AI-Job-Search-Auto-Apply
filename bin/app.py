@@ -730,27 +730,56 @@ with tab_chat:
                             return
                         with placeholder.container():
                             st.markdown("---")
-                            st.markdown(f"#### 🔄 [{s['index']}/{s['total']}] Processing email: `{s['email']}`")
-                            st.markdown(f"**From**: `{s['sender']}` ➡️ **To**: `{s['email']}` | **Subject**: *'{s['subject']}'*")
-                            
-                            with st.expander("📄 This is the template body", expanded=False):
-                                st.text(s["gen_body"])
+                            st.markdown(
+                                f"#### 🔄 [{s['index']}/{s['total']}]"
+                                f" Processing: `{s['email']}`"
+                            )
+                            st.markdown(
+                                f"**From**: `{s['sender']}` ➡️"
+                                f" **To**: `{s['email']}`"
+                                f" | **Subject**: *'{s['subject']}'*"
+                            )
+                            # Use st.text directly — no expanders
+                            # inside placeholder.container() to
+                            # avoid StreamlitAPIException
+                            st.caption("📄 Template body:")
+                            st.text(s["gen_body"])
 
                             mode = s.get("mode")
                             if mode == "llm_success":
-                                st.success(f"🤖 **Personalized by AI for recipient!** Subject: *'{s['subject']}'*")
-                                with st.expander("📄 This is the personalized body", expanded=True):
-                                    st.text(s["ai_body"])
+                                st.success(
+                                    f"🤖 **Personalized by AI!"
+                                    f"** Subject: *'{s['subject']}'*"
+                                )
+                                st.caption(
+                                    "📄 AI-personalized body:"
+                                )
+                                st.text(s["ai_body"])
                             elif mode == "llm_unavailable":
-                                reason = s.get("reason", "No LLM detected")
-                                st.warning(f"⚠️ **Oops, sorry! No LLM detected.** ({reason})\n\nSwitching to the template body...")
-                                with st.expander("📄 This is the body (Fallback)", expanded=True):
-                                    st.text(s["ai_body"])
+                                reason = s.get(
+                                    "reason", "No LLM detected"
+                                )
+                                st.warning(
+                                    f"⚠️ **No LLM detected.**"
+                                    f" ({reason})\n\n"
+                                    f"Switching to template body."
+                                )
+                                st.caption("📄 Fallback body:")
+                                st.text(s["ai_body"])
                             elif mode == "llm_incomplete_fallback":
-                                reason = s.get("reason", "Incomplete email detected")
-                                st.warning(f"⚠️ **Incomplete / Defective email detected.** ({reason})\n\nApplying robust fallback: Switching to template body with personalized salutation & closing.")
-                                with st.expander("📄 This is the body (Fallback Applied)", expanded=True):
-                                    st.text(s["ai_body"])
+                                reason = s.get(
+                                    "reason",
+                                    "Incomplete email detected",
+                                )
+                                st.warning(
+                                    f"⚠️ **Incomplete email.**"
+                                    f" ({reason})\n\n"
+                                    f"Switched to fallback."
+                                )
+                                st.caption(
+                                    "📄 Fallback body applied:"
+                                )
+                                st.text(s["ai_body"])
 
                             status = s.get("status")
                             if status == "sending":
@@ -1252,6 +1281,8 @@ with tab_linkedin:
         st.session_state.li_scraping = False
     if "li_streak_paused" not in st.session_state:
         st.session_state.li_streak_paused = False
+    if "li_open_mode" not in st.session_state:
+        st.session_state.li_open_mode = "Feed"
 
     # ── Settings Section ─────────────────────────────
     with st.expander(
@@ -1516,6 +1547,81 @@ with tab_linkedin:
 
     st.markdown("---")
 
+    # ── Job Search Section ───────────────────────────
+    st.markdown("#### 🔍 LinkedIn Job Search (Optional)")
+    st.caption(
+        "Open LinkedIn directly to a job search page "
+        "before scraping. Enter one or more job titles."
+    )
+
+    col_js1, col_js2 = st.columns([3, 1])
+    with col_js1:
+        job_titles_input = st.text_input(
+            "Job title(s) to search "
+            "(comma-separated for multiple):",
+            placeholder=(
+                "e.g. Data Scientist, "
+                "AI Engineer, ML Engineer"
+            ),
+            key="li_job_titles_input",
+            help=(
+                "Enter one title or multiple titles "
+                "separated by commas. Multiple titles "
+                "are searched with OR logic on LinkedIn."
+            ),
+        )
+    with col_js2:
+        open_jobs_btn = st.button(
+            "🔍 Open Job Search in Edge",
+            use_container_width=True,
+            key="li_open_jobs_btn",
+            help="Opens LinkedIn job search in Edge.",
+        )
+
+    if open_jobs_btn:
+        try:
+            from linkedin_scraper.window_manager import (
+                build_linkedin_job_search_url,
+                launch_edge,
+            )
+            titles = [
+                t.strip()
+                for t in job_titles_input.split(",")
+                if t.strip()
+            ]
+            job_url = build_linkedin_job_search_url(
+                titles
+            )
+            with st.spinner(
+                "Opening LinkedIn job search in Edge..."
+            ):
+                launched = launch_edge(job_url)
+            if launched:
+                if titles:
+                    titles_str = ", ".join(titles)
+                    st.success(
+                        f"✅ Opened LinkedIn job search "
+                        f"for: **{titles_str}**"
+                    )
+                else:
+                    st.success(
+                        "✅ Opened LinkedIn Jobs page."
+                    )
+                st.caption(
+                    f"URL: `{job_url}`"
+                )
+            else:
+                st.error(
+                    "❌ Could not launch Edge. "
+                    "Please open Edge manually."
+                )
+        except Exception as js_err:
+            st.error(
+                f"❌ Job search error: {js_err}"
+            )
+
+    st.markdown("---")
+
     # ── Scraping Controls ────────────────────────────
     st.markdown("#### 🚀 Scraping Controls")
     col_launch, col_clear = st.columns([2, 1])
@@ -1556,7 +1662,7 @@ with tab_linkedin:
 
             current_scraper_cfg = get_scraper_config()
 
-            # Warm up OCR in background
+            # Warm up OCR in background thread
             if current_scraper_cfg.get(
                 "ocr", {}
             ).get("warm_up_on_start", True):
@@ -1564,11 +1670,24 @@ with tab_linkedin:
                     current_scraper_cfg.get("ocr", {})
                 )
 
-            # Launch / focus Edge
-            with st.spinner(
-                "Launching Edge browser..."
-            ):
-                ready = ensure_edge_ready(
+            # Determine URL: use job search URL if
+            # job titles were entered, else feed URL
+            titles_for_launch = [
+                t.strip()
+                for t in job_titles_input.split(",")
+                if t.strip()
+            ]
+
+            if titles_for_launch:
+                from linkedin_scraper.window_manager\
+                    import build_linkedin_job_search_url
+                launch_url = (
+                    build_linkedin_job_search_url(
+                        titles_for_launch
+                    )
+                )
+            else:
+                launch_url = (
                     current_scraper_cfg
                     .get("linkedin", {})
                     .get(
@@ -1578,104 +1697,111 @@ with tab_linkedin:
                     )
                 )
 
+            # Launch / focus Edge
+            with st.spinner(
+                "Launching Edge browser..."
+            ):
+                ready = ensure_edge_ready(launch_url)
+
             if not ready:
-                st.error(
-                    "❌ Could not find or launch Edge. "
-                    "Please open Edge manually with "
-                    "LinkedIn and try again."
+                st.warning(
+                    "⚠️ Edge window not detected. "
+                    "Attempting to proceed anyway — "
+                    "please ensure Edge is open with "
+                    "LinkedIn visible."
                 )
-                st.session_state.li_scraping = False
-            else:
+
+            if ready or True:  # proceed even if uncertain
                 st.success(
                     "✅ Edge is ready. Starting scan..."
                 )
 
-                progress_placeholder = st.empty()
-                log_placeholder = st.empty()
-                log_lines: list[str] = []
+            progress_placeholder = st.empty()
+            log_placeholder = st.empty()
+            log_lines: list[str] = []
 
-                try:
-                    from resource_manager import (
-                        get_safe_workers,
+            try:
+                from resource_manager import (
+                    get_safe_workers,
+                )
+                workers = get_safe_workers(
+                    current_scraper_cfg
+                )
+            except Exception:
+                workers = 2
+
+            for event in scroll_and_scrape(
+                scraper_cfg=current_scraper_cfg,
+                workers=workers,
+            ):
+                ev = event.get("event")
+
+                if ev == "started":
+                    log_lines.append(
+                        "🟢 Scraping started..."
                     )
-                    workers = get_safe_workers(
-                        current_scraper_cfg
+
+                elif ev == "skipped":
+                    log_lines.append(
+                        f"⚡ Post "
+                        f"{event['post']} — "
+                        f"{event['reason']}, "
+                        f"skipped"
                     )
-                except Exception:
-                    workers = 2
 
-                for event in scroll_and_scrape(
-                    scraper_cfg=current_scraper_cfg,
-                    workers=workers,
-                ):
-                    ev = event.get("event")
-
-                    if ev == "started":
-                        log_lines.append(
-                            "🟢 Scraping started..."
-                        )
-
-                    elif ev == "skipped":
-                        log_lines.append(
-                            f"⚡ Post "
-                            f"{event['post']} — "
-                            f"{event['reason']}, "
-                            f"skipped"
-                        )
-
-                    elif ev == "found":
-                        email = event["email"]
-                        st.session_state\
-                            .li_found_emails\
-                            .append(email)
-                        log_lines.append(
-                            f"✅ Post "
-                            f"{event['post']} — "
-                            f"new: {email}"
-                        )
-
-                    elif ev == "duplicate":
-                        log_lines.append(
-                            f"🔁 Post "
-                            f"{event['post']} — "
-                            f"duplicate: "
-                            f"{event['email']}, "
-                            f"skipped"
-                        )
-
-                    elif ev == "streak":
-                        log_lines.append(
-                            f"⚠️ {event['count']} "
-                            f"consecutive posts with "
-                            f"no new emails"
-                        )
-                        st.session_state\
-                            .li_streak_paused = True
-
-                    elif ev == "error":
-                        log_lines.append(
-                            f"❌ {event['message']}"
-                        )
-                        break
-
-                    elif ev == "done":
-                        log_lines.append(
-                            f"🏁 Done! Found "
-                            f"{event['total_found']} "
-                            f"new emails across "
-                            f"{event['posts']} posts."
-                        )
-
-                    # Update live log display
-                    log_placeholder.code(
-                        "\n".join(log_lines[-20:]),
-                        language="text",
+                elif ev == "found":
+                    email = event["email"]
+                    st.session_state\
+                        .li_found_emails\
+                        .append(email)
+                    log_lines.append(
+                        f"✅ Post "
+                        f"{event['post']} — "
+                        f"new: {email}"
                     )
-                    progress_placeholder.caption(
-                        f"Found so far: "
-                        f"**{len(st.session_state.li_found_emails)}** "
-                        f"new emails"
+
+                elif ev == "duplicate":
+                    log_lines.append(
+                        f"🔁 Post "
+                        f"{event['post']} — "
+                        f"duplicate: "
+                        f"{event['email']}, "
+                        f"skipped"
                     )
+
+                elif ev == "streak":
+                    log_lines.append(
+                        f"⚠️ {event['count']} "
+                        f"consecutive posts with "
+                        f"no new emails"
+                    )
+                    st.session_state\
+                        .li_streak_paused = True
+
+                elif ev == "error":
+                    log_lines.append(
+                        f"❌ {event['message']}"
+                    )
+                    break
+
+                elif ev == "done":
+                    log_lines.append(
+                        f"🏁 Done! Found "
+                        f"{event['total_found']} "
+                        f"new emails across "
+                        f"{event['posts']} posts."
+                    )
+
+                # Update live log display
+                log_placeholder.code(
+                    "\n".join(log_lines[-20:]),
+                    language="text",
+                )
+                progress_placeholder.caption(
+                    f"Found so far: "
+                    f"**{len(st.session_state.li_found_emails)}** "
+                    f"new emails"
+                )
 
         except ImportError as imp_err:
             st.error(

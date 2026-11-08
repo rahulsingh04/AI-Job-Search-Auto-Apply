@@ -27,11 +27,8 @@ from .date_utils import get_lookback_date
 from .storage import load_email_storage
 from .sender import send_email
 
-_email_cfg = get_email_config()
-LOOK_BACK = _email_cfg.get("look_back", 1)
-LOOK_BACK_FORMAT = _email_cfg.get(
-    "look_back_format", "months"
-)
+LOOK_BACK = 1
+LOOK_BACK_FORMAT = "months"
 
 EMAIL_PATTERN = re.compile(
     r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+"

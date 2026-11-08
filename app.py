@@ -5,9 +5,12 @@ Run command:
     streamlit run app.py
 """
 
+import subprocess
+import sys
 from pathlib import Path
-import runpy
 
-app_path = Path(__file__).parent / "bin" / "app.py"
-runpy.run_path(str(app_path), run_name="__main__")
-
+bin_app = Path(__file__).parent / "bin" / "app.py"
+subprocess.run(
+    [sys.executable, "-m", "streamlit", "run", str(bin_app)],
+    check=False,
+)
