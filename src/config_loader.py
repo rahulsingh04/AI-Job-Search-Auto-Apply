@@ -1,6 +1,7 @@
 """Configuration loader helper to read and update static project configs from JSON files."""
 
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -8,6 +9,7 @@ from typing import Any, Dict, List
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = PROJECT_ROOT / "data" / "config"
 MASTER_CONFIG_FILE = CONFIG_DIR / "project_config.json"
+SCRAPER_CONFIG_FILE = CONFIG_DIR / "scraper_config.json"
 
 
 def _read_json(file_path: Path) -> Dict[str, Any]:
@@ -32,16 +34,18 @@ def load_project_config() -> Dict[str, Any]:
     return _read_json(MASTER_CONFIG_FILE)
 
 
+@lru_cache(maxsize=1)
 def get_candidate_profile() -> Dict[str, Any]:
-    """Load the candidate profile information."""
+    """Load the candidate profile — cached after first read."""
     config = load_project_config()
     if "candidate_profile" in config:
         return config["candidate_profile"]
     return _read_json(CONFIG_DIR / "candidate_profile.json")
 
 
+@lru_cache(maxsize=1)
 def get_email_config() -> Dict[str, Any]:
-    """Load email settings (sender, subject, template, lookback)."""
+    """Load email settings — cached after first read."""
     config = load_project_config()
     if "email_config" in config:
         return config["email_config"]
@@ -49,7 +53,8 @@ def get_email_config() -> Dict[str, Any]:
 
 
 def save_email_config(new_email_cfg: Dict[str, Any]) -> None:
-    """Save updated email settings to email_config.json and project_config.json."""
+    """Save updated email settings and invalidate cache."""
+    get_email_config.cache_clear()
     _write_json(CONFIG_DIR / "email_config.json", new_email_cfg)
     if MASTER_CONFIG_FILE.is_file():
         master = load_project_config()
@@ -57,8 +62,9 @@ def save_email_config(new_email_cfg: Dict[str, Any]) -> None:
         _write_json(MASTER_CONFIG_FILE, master)
 
 
+@lru_cache(maxsize=1)
 def get_model_config() -> Dict[str, Any]:
-    """Load LLM model settings and system prompt."""
+    """Load LLM model settings — cached after first read."""
     config = load_project_config()
     if "model_config" in config:
         return config["model_config"]
@@ -66,7 +72,8 @@ def get_model_config() -> Dict[str, Any]:
 
 
 def save_model_config(new_model_cfg: Dict[str, Any]) -> None:
-    """Save updated model settings and system prompt to model_config.json and project_config.json."""
+    """Save updated model settings and invalidate cache."""
+    get_model_config.cache_clear()
     _write_json(CONFIG_DIR / "model_config.json", new_model_cfg)
     if MASTER_CONFIG_FILE.is_file():
         master = load_project_config()
@@ -74,21 +81,35 @@ def save_model_config(new_model_cfg: Dict[str, Any]) -> None:
         _write_json(MASTER_CONFIG_FILE, master)
 
 
+@lru_cache(maxsize=1)
 def get_smtp_config() -> Dict[str, Any]:
-    """Load SMTP connection configuration."""
+    """Load SMTP connection configuration — cached after first read."""
     config = load_project_config()
     if "smtp_config" in config:
         return config["smtp_config"]
     return _read_json(CONFIG_DIR / "smtp_config.json")
 
 
+@lru_cache(maxsize=1)
 def get_generic_email_prefixes() -> List[str]:
-    """Load list of generic email prefixes (hr, careers, etc.)."""
+    """Load generic email prefixes — cached after first read."""
     config = load_project_config()
     if "generic_email_prefixes" in config:
         return config["generic_email_prefixes"]
     data = _read_json(CONFIG_DIR / "generic_email_names.json")
     return data.get("generic_email_prefixes", [])
+
+
+@lru_cache(maxsize=1)
+def get_scraper_config() -> Dict[str, Any]:
+    """Load scraper config — cached after first read."""
+    return _read_json(SCRAPER_CONFIG_FILE)
+
+
+def save_scraper_config(new_cfg: Dict[str, Any]) -> None:
+    """Save scraper config and invalidate cache."""
+    get_scraper_config.cache_clear()
+    _write_json(SCRAPER_CONFIG_FILE, new_cfg)
 
 
 def get_recipients() -> List[str]:

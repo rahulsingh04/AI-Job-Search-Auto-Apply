@@ -2,14 +2,21 @@
 Email Generator with LLM Personalization and Fallback
 =====================================================
 Orchestrates AI rewriting using local Ollama models, enforces salutation,
-bullet points, and \\n\\n spacing, and handles graceful fallback when no LLM is detected.
+bullet points, and \\n\\n spacing, and handles graceful fallback when no
+LLM is detected. Also provides template-only generation utilities.
 """
 
+import random
+from pathlib import Path
 from typing import Optional
+
 from pydantic import ValidationError
 
 try:
-    from langchain_core.messages import SystemMessage, HumanMessage
+    from langchain_core.messages import (
+        SystemMessage,
+        HumanMessage,
+    )
     from .model import structured_llm
     LANGCHAIN_AVAILABLE = True
 except (ImportError, Exception):
@@ -21,8 +28,17 @@ except (ImportError, Exception):
 from .schemas import EmailResponse
 from .prompts import get_active_system_prompt
 from .recipient import infer_recipient_name
-from .formatter import format_email_body, enforce_correct_greeting
+from .formatter import (
+    format_email_body,
+    enforce_correct_greeting,
+)
 from .validator import email_validator, ValidationReport
+
+_TEMPLATE_DIR = (
+    Path(__file__).resolve().parent.parent.parent
+    / "data"
+    / "template"
+)
 
 
 class LLMUnavailableError(Exception):
@@ -31,9 +47,8 @@ class LLMUnavailableError(Exception):
 
 
 class IncompleteEmailError(Exception):
-    """Raised when generated email is incomplete or fails quality validation."""
+    """Raised when generated email fails quality validation."""
     pass
-
 
 
 def is_invalid_email(body_text: str) -> bool:
@@ -52,7 +67,9 @@ def is_invalid_email(body_text: str) -> bool:
         "education:",
     ]
 
-    marker_count = sum(marker in text for marker in profile_markers)
+    marker_count = sum(
+        marker in text for marker in profile_markers
+    )
 
     if marker_count >= 2:
         return True
@@ -71,13 +88,12 @@ def generate_professional_email(
 ) -> EmailResponse:
     """
     Rewrite an email using the local Ollama model.
-    If the LLM server is unreachable, raises LLMUnavailableError so the caller can switch to fallback.
-
-    Returns:
-        EmailResponse containing the tailored subject (if generated) and formatted body.
+    Raises LLMUnavailableError if server is unreachable.
     """
     if not recipient_email or not recipient_email.strip():
-        raise ValueError("Recipient email cannot be empty.")
+        raise ValueError(
+            "Recipient email cannot be empty."
+        )
 
     if not general_subject or not general_subject.strip():
         raise ValueError("General subject cannot be empty.")
@@ -86,12 +102,19 @@ def generate_professional_email(
         raise ValueError("General body cannot be empty.")
 
     recipient_name = infer_recipient_name(recipient_email)
-    recipient_name_context = recipient_name if recipient_name else "Not identifiable; use a polite general greeting"
+    recipient_name_context = (
+        recipient_name
+        if recipient_name
+        else (
+            "Not identifiable; use a polite general greeting"
+        )
+    )
 
     active_prompt = get_active_system_prompt(system_prompt)
 
     user_prompt = f"""
-Please rewrite the following email for the recipient respectfully and professionally.
+Please rewrite the following email for the recipient \
+respectfully and professionally.
 
 RECIPIENT EMAIL:
 {recipient_email}
@@ -107,19 +130,24 @@ ORIGINAL GENERIC BODY:
 
 INSTRUCTIONS:
 - Write in a highly respectful, humble, and polite tone.
-- When transitioning from one thought/sentence to the next paragraph, use double newlines (\\n\\n).
-- Present key skills or achievements as bullet points (•) on separate lines with \\n\\n spacing.
+- Use double newlines (\\n\\n) between paragraphs.
+- Present key skills as bullet points (•).
 - Mention the attached resume.
 - Sign off respectfully.
 - Return ONLY valid JSON with 'subject' and 'body' fields.
 """
 
-    if not LANGCHAIN_AVAILABLE or structured_llm is None or SystemMessage is None or HumanMessage is None:
-        raise LLMUnavailableError("No LLM detected (LangChain/Ollama libraries not initialized). Switching to generic body.")
+    if (
+        not LANGCHAIN_AVAILABLE
+        or structured_llm is None
+        or SystemMessage is None
+        or HumanMessage is None
+    ):
+        raise LLMUnavailableError(
+            "No LLM detected. Switching to generic body."
+        )
 
     last_error = None
-    last_raw_output = ""
-
 
     for attempt in range(2):
         current_prompt = user_prompt
@@ -128,7 +156,8 @@ INSTRUCTIONS:
 
 CORRECTION:
 The previous response did not satisfy requirements.
-Ensure respectful tone, double newlines (\\n\\n) between sections, and clean bullet points (•).
+Ensure respectful tone, double newlines (\\n\\n) between
+sections, and clean bullet points (•).
 Return ONLY JSON with 'subject' and 'body'.
 """
 
@@ -138,50 +167,79 @@ Return ONLY JSON with 'subject' and 'body'.
                 HumanMessage(content=current_prompt),
             ])
         except Exception as exc:
-            # Detect connection or server unavailable errors
             err_str = str(exc).lower()
-            if any(term in err_str for term in ["connect", "refused", "unavailable", "timeout", "offline", "not found"]):
-                raise LLMUnavailableError(f"No LLM detected or Ollama server connection failed: {exc}") from exc
+            if any(
+                term in err_str
+                for term in [
+                    "connect", "refused", "unavailable",
+                    "timeout", "offline", "not found",
+                ]
+            ):
+                raise LLMUnavailableError(
+                    f"Ollama connection failed: {exc}"
+                ) from exc
             raise
 
         raw_message = response.get("raw")
-        last_raw_output = str(raw_message.content) if raw_message is not None else ""
+        _ = (
+            str(raw_message.content)
+            if raw_message is not None
+            else ""
+        )
 
         if response.get("parsing_error") is not None:
-            last_error = f"JSON/Pydantic parsing failed: {response['parsing_error']}"
+            last_error = (
+                f"JSON/Pydantic parsing failed: "
+                f"{response['parsing_error']}"
+            )
             continue
 
         result = response.get("parsed")
 
         try:
             if isinstance(result, dict):
-                result = EmailResponse.model_validate(result)
-
+                result = EmailResponse.model_validate(
+                    result
+                )
             if not isinstance(result, EmailResponse):
-                raise ValueError("The model did not return a valid EmailResponse.")
-
+                raise ValueError(
+                    "Model did not return EmailResponse."
+                )
         except (ValidationError, ValueError) as exc:
             last_error = str(exc)
             continue
 
         if is_invalid_email(result.body):
-            last_error = "The model copied profile info or returned an overly long response."
+            last_error = (
+                "Model copied profile info or returned "
+                "an overly long response."
+            )
             continue
 
-        # Format greeting, spacing, and ensure signature
         formatted_body = format_email_body(
             body_text=result.body,
             recipient_name=recipient_name,
         )
 
-        final_subject = result.subject.strip() if (result.subject and result.subject.strip()) else general_subject
+        final_subject = (
+            result.subject.strip()
+            if (result.subject and result.subject.strip())
+            else general_subject
+        )
 
-        # Validate completeness with email_validator
-        val_report = email_validator.validate(formatted_body, recipient_name=recipient_name)
+        val_report = email_validator.validate(
+            formatted_body,
+            recipient_name=recipient_name,
+        )
         if not val_report.is_valid:
-            last_error = f"Incomplete email defects: {'; '.join(val_report.issues)}"
+            last_error = (
+                f"Incomplete email defects: "
+                f"{'; '.join(val_report.issues)}"
+            )
             if attempt == 0:
-                current_prompt += f"\n\n{val_report.feedback}"
+                current_prompt += (
+                    f"\n\n{val_report.feedback}"
+                )
             continue
 
         return EmailResponse(
@@ -189,8 +247,9 @@ Return ONLY JSON with 'subject' and 'body'.
             body=formatted_body,
         )
 
-    # If retry attempts exhausted without producing a complete email, raise IncompleteEmailError
-    raise IncompleteEmailError(f"AI generated an incomplete email ({last_error}).")
+    raise IncompleteEmailError(
+        f"AI generated an incomplete email ({last_error})."
+    )
 
 
 def build_fallback_email(
@@ -199,11 +258,13 @@ def build_fallback_email(
     general_body: str,
 ) -> EmailResponse:
     """
-    Builds the formatted fallback email using the static/generic body
-    with correct recipient greeting, complete closing, and double newline paragraph breaks.
+    Build formatted fallback email using static body.
+    No LLM involved — pure string formatting.
     """
     recipient_name = infer_recipient_name(recipient_email)
-    formatted = format_email_body(general_body, recipient_name)
+    formatted = format_email_body(
+        general_body, recipient_name
+    )
     normalized = formatted.replace("\r\n", "\n")
     return EmailResponse(
         subject=general_subject,
@@ -218,13 +279,8 @@ def generate_email_with_fallback(
     system_prompt: Optional[str] = None,
 ) -> tuple[EmailResponse, bool, str]:
     """
-    Safely generates outreach email for a recipient:
-    1. Attempts AI personalization with local LLM.
-    2. If LLM is offline, times out, throws errors, or produces incomplete output,
-       it automatically falls back to the formatted generic/static body.
-
-    Returns:
-        tuple of (EmailResponse, used_llm: bool, status_reason: str)
+    Safely generate outreach email with LLM fallback.
+    Returns (EmailResponse, used_llm, status_reason).
     """
     try:
         res = generate_professional_email(
@@ -235,13 +291,151 @@ def generate_email_with_fallback(
         )
         return res, True, "Personalized by AI for recipient"
     except LLMUnavailableError as err:
-        fallback = build_fallback_email(recipient_email, general_subject, general_body)
-        return fallback, False, f"LLM offline or unreachable ({err}). Using generic body fallback."
+        fallback = build_fallback_email(
+            recipient_email, general_subject, general_body
+        )
+        return (
+            fallback,
+            False,
+            f"LLM offline ({err}). Using fallback.",
+        )
     except IncompleteEmailError as err:
-        fallback = build_fallback_email(recipient_email, general_subject, general_body)
-        return fallback, False, f"Incomplete AI generation ({err}). Using generic body fallback."
+        fallback = build_fallback_email(
+            recipient_email, general_subject, general_body
+        )
+        return (
+            fallback,
+            False,
+            f"Incomplete AI generation ({err}). Fallback.",
+        )
     except Exception as err:
-        fallback = build_fallback_email(recipient_email, general_subject, general_body)
-        return fallback, False, f"AI generation error ({err}). Using generic body fallback."
+        fallback = build_fallback_email(
+            recipient_email, general_subject, general_body
+        )
+        return (
+            fallback,
+            False,
+            f"AI generation error ({err}). Fallback.",
+        )
 
 
+# ---------------------------------------------------------------------------
+# Template-only utilities (no LLM)
+# ---------------------------------------------------------------------------
+
+def get_available_templates() -> list[int]:
+    """
+    Dynamically read template folder.
+    Returns sorted list of available template indices.
+    Never hardcoded — reads from data/template/ folder.
+    """
+    if not _TEMPLATE_DIR.is_dir():
+        return []
+    indices = []
+    for f in _TEMPLATE_DIR.glob("template*.txt"):
+        stem = f.stem.replace("template", "")
+        if stem.isdigit():
+            indices.append(int(stem))
+    return sorted(indices)
+
+
+def get_template_sequence(
+    count: int,
+    template_cfg: dict,
+) -> list[int]:
+    """
+    Generate template index sequence for N recipients.
+    mode='fixed'  → all use fixed_template_index
+    mode='random' → no two consecutive same template
+    """
+    mode = template_cfg.get("mode", "random")
+    fixed_index = template_cfg.get("fixed_template_index")
+    no_repeat = template_cfg.get(
+        "no_consecutive_repeat", True
+    )
+    templates = get_available_templates()
+
+    if not templates:
+        return [1] * count
+
+    if mode == "fixed" and fixed_index is not None:
+        return [int(fixed_index)] * count
+
+    sequence: list[int] = []
+    last: int | None = None
+
+    for _ in range(count):
+        if no_repeat and last is not None:
+            available = (
+                [t for t in templates if t != last]
+                or templates
+            )
+        else:
+            available = templates
+
+        chosen = random.choice(available)
+        sequence.append(chosen)
+        last = chosen
+
+    return sequence
+
+
+def fill_template(
+    template_index: int,
+    profile: dict,
+    recipient_name: str,
+) -> str:
+    """
+    Load template{n}.txt and fill all placeholders
+    from candidate profile. No LLM — pure substitution.
+    """
+    template_file = (
+        _TEMPLATE_DIR / f"template{template_index}.txt"
+    )
+
+    if not template_file.is_file():
+        return ""
+
+    content = template_file.read_text(encoding="utf-8")
+
+    skills = profile.get("technical_skills", [])
+    skills_str = (
+        ", ".join(skills)
+        if isinstance(skills, list)
+        else str(skills)
+    )
+
+    projects = profile.get("projects", [])
+    projects_str = (
+        "\n• ".join(projects)
+        if isinstance(projects, list)
+        else str(projects)
+    )
+
+    replacements = {
+        "{name}": recipient_name or "there",
+        "{candidate_name}": profile.get("name", ""),
+        "{current_role}": profile.get(
+            "current_role", ""
+        ),
+        "{experience}": profile.get(
+            "experience_summary", ""
+        ),
+        "{experience_summary}": profile.get(
+            "experience_summary", ""
+        ),
+        "{technical_skills}": skills_str,
+        "{key_skills}": skills_str,
+        "{projects}": projects_str,
+        "{education}": profile.get("education", ""),
+        "{email}": profile.get("email", ""),
+        "{phone}": profile.get("phone", ""),
+        "{linkedin}": profile.get("linkedin_url", ""),
+    }
+
+    for placeholder, value in replacements.items():
+        content = content.replace(
+            placeholder, str(value)
+        )
+
+    return content

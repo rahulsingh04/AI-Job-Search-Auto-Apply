@@ -1,0 +1,26 @@
+{
+    "linkedin": {
+        "feed_url": "https://www.linkedin.com/feed/",
+        "max_posts": 20,
+        "empty_streak_limit": 10,
+        "scroll_amount": 3,
+        "scroll_delay_seconds": 0.8,
+        "post_load_wait_seconds": 1.0
+    },
+    "ocr": {
+        "languages": ["en"],
+        "use_gpu": false,
+        "warm_up_on_start": true
+    },
+    "resource": {
+        "max_worker_cap": 5,
+        "cpu_overload_threshold": 80,
+        "ram_per_worker_gb": 2.0,
+        "min_workers": 2
+    },
+    "template": {
+        "mode": "random",
+        "fixed_template_index": null,
+        "no_consecutive_repeat": true
+    }
+}

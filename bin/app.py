@@ -27,6 +27,8 @@ from config_loader import (
     save_model_config,
     get_smtp_config,
     get_candidate_profile,
+    get_scraper_config,
+    save_scraper_config,
 )
 from email_db_helper import (
     DEFAULT_STORAGE_FILE,
@@ -259,11 +261,12 @@ st.markdown('<div class="sub-title">Personalized cold outreach with local LLM, a
 # ---------------------------------------------------------------------------
 # Main Tabs
 # ---------------------------------------------------------------------------
-tab_chat, tab_prompt_inspect, tab_db, tab_domains = st.tabs([
+tab_chat, tab_prompt_inspect, tab_db, tab_domains, tab_linkedin = st.tabs([
     "💬 Chat & Auto-Email",
     "🔍 Subject, Body & System Prompt",
     "🗄️ Database Manager (Modify & Delete)",
-    "🌐 Domain-Wise Email Viewer"
+    "🌐 Domain-Wise Email Viewer",
+    "🔗 LinkedIn Scraper",
 ])
 
 
@@ -279,7 +282,7 @@ with tab_chat:
             st.markdown(msg["content"])
 
     # 1. Dedicated Resume Upload & Profile Extractor (Option to view and edit extracted details)
-    with st.expander("📄 Upload Resume & Extract Candidate Profile", expanded=True):
+    with st.container():
         uploaded_resume_file = st.file_uploader(
             "Upload Resume (PDF, Word, or TXT)",
             type=["pdf", "docx", "doc", "txt"],
@@ -1223,3 +1226,708 @@ with tab_domains:
                             if st.button("🗑️ Delete", key=f"del_{domain}_{idx}_{e_addr}"):
                                 st.session_state.pending_delete_email = e_addr
                                 st.rerun()
+
+
+# ===========================================================================
+# TAB 5: LinkedIn Post Email Scraper
+# ===========================================================================
+with tab_linkedin:
+    st.markdown("### 🔗 LinkedIn Post Email Scraper")
+    st.write(
+        "Scrape emails from LinkedIn posts visible in "
+        "your Edge browser, then send via template."
+    )
+
+    # ── Load scraper config ──────────────────────────
+    scraper_cfg = get_scraper_config()
+    linkedin_cfg = scraper_cfg.get("linkedin", {})
+    ocr_cfg = scraper_cfg.get("ocr", {})
+    resource_cfg = scraper_cfg.get("resource", {})
+    template_cfg = scraper_cfg.get("template", {})
+
+    # ── Session state init ───────────────────────────
+    if "li_found_emails" not in st.session_state:
+        st.session_state.li_found_emails = []
+    if "li_scraping" not in st.session_state:
+        st.session_state.li_scraping = False
+    if "li_streak_paused" not in st.session_state:
+        st.session_state.li_streak_paused = False
+
+    # ── Settings Section ─────────────────────────────
+    with st.expander(
+        "⚙️ Scraper & Resource Settings",
+        expanded=True,
+    ):
+        st.caption(
+            "All settings are saved to "
+            "`scraper_config.json` automatically."
+        )
+
+        col_s1, col_s2 = st.columns(2)
+
+        with col_s1:
+            st.markdown("##### 🔗 LinkedIn Settings")
+            feed_url = st.text_input(
+                "LinkedIn Feed URL:",
+                value=linkedin_cfg.get(
+                    "feed_url",
+                    "https://www.linkedin.com/feed/",
+                ),
+                key="li_feed_url",
+            )
+            max_posts = st.number_input(
+                "Posts to scan:",
+                min_value=1,
+                max_value=500,
+                value=int(
+                    linkedin_cfg.get("max_posts", 20)
+                ),
+                key="li_max_posts",
+            )
+            streak_limit = st.number_input(
+                "Stop after N empty posts:",
+                min_value=1,
+                max_value=100,
+                value=int(
+                    linkedin_cfg.get(
+                        "empty_streak_limit", 10
+                    )
+                ),
+                key="li_streak_limit",
+            )
+            scroll_amount = st.number_input(
+                "Scroll amount per post:",
+                min_value=1,
+                max_value=20,
+                value=int(
+                    linkedin_cfg.get("scroll_amount", 3)
+                ),
+                key="li_scroll_amount",
+            )
+            scroll_delay = st.number_input(
+                "Scroll delay (seconds):",
+                min_value=0.1,
+                max_value=5.0,
+                value=float(
+                    linkedin_cfg.get(
+                        "scroll_delay_seconds", 0.8
+                    )
+                ),
+                step=0.1,
+                key="li_scroll_delay",
+            )
+            post_wait = st.number_input(
+                "Post load wait (seconds):",
+                min_value=0.1,
+                max_value=10.0,
+                value=float(
+                    linkedin_cfg.get(
+                        "post_load_wait_seconds", 1.0
+                    )
+                ),
+                step=0.1,
+                key="li_post_wait",
+            )
+
+        with col_s2:
+            st.markdown("##### 💻 Resource Settings")
+            max_worker_cap = st.number_input(
+                "Max worker cap (Gmail safe limit):",
+                min_value=1,
+                max_value=10,
+                value=int(
+                    resource_cfg.get("max_worker_cap", 5)
+                ),
+                key="li_max_worker_cap",
+            )
+            cpu_threshold = st.number_input(
+                "CPU overload threshold (%):",
+                min_value=10,
+                max_value=100,
+                value=int(
+                    resource_cfg.get(
+                        "cpu_overload_threshold", 80
+                    )
+                ),
+                key="li_cpu_threshold",
+            )
+            ram_per_worker = st.number_input(
+                "RAM per worker (GB):",
+                min_value=0.5,
+                max_value=8.0,
+                value=float(
+                    resource_cfg.get(
+                        "ram_per_worker_gb", 2.0
+                    )
+                ),
+                step=0.5,
+                key="li_ram_per_worker",
+            )
+            min_workers = st.number_input(
+                "Minimum workers:",
+                min_value=1,
+                max_value=5,
+                value=int(
+                    resource_cfg.get("min_workers", 2)
+                ),
+                key="li_min_workers",
+            )
+
+            st.markdown("##### 🔍 OCR Settings")
+            ocr_langs_raw = st.text_input(
+                "OCR languages (comma separated):",
+                value=", ".join(
+                    ocr_cfg.get("languages", ["en"])
+                ),
+                key="li_ocr_langs",
+            )
+            use_gpu = st.checkbox(
+                "Use GPU for OCR (if available):",
+                value=bool(ocr_cfg.get("use_gpu", False)),
+                key="li_use_gpu",
+            )
+            warm_up = st.checkbox(
+                "Warm up OCR on app start:",
+                value=bool(
+                    ocr_cfg.get("warm_up_on_start", True)
+                ),
+                key="li_warm_up",
+            )
+
+        col_save_cfg, col_reset_cfg = st.columns([1, 1])
+        with col_save_cfg:
+            if st.button(
+                "💾 Save Settings",
+                type="primary",
+                use_container_width=True,
+                key="li_save_settings",
+            ):
+                ocr_langs = [
+                    lang.strip()
+                    for lang in ocr_langs_raw.split(",")
+                    if lang.strip()
+                ]
+                new_cfg = {
+                    "linkedin": {
+                        "feed_url": feed_url,
+                        "max_posts": int(max_posts),
+                        "empty_streak_limit": int(
+                            streak_limit
+                        ),
+                        "scroll_amount": int(
+                            scroll_amount
+                        ),
+                        "scroll_delay_seconds": float(
+                            scroll_delay
+                        ),
+                        "post_load_wait_seconds": float(
+                            post_wait
+                        ),
+                    },
+                    "ocr": {
+                        "languages": ocr_langs,
+                        "use_gpu": use_gpu,
+                        "warm_up_on_start": warm_up,
+                    },
+                    "resource": {
+                        "max_worker_cap": int(
+                            max_worker_cap
+                        ),
+                        "cpu_overload_threshold": int(
+                            cpu_threshold
+                        ),
+                        "ram_per_worker_gb": float(
+                            ram_per_worker
+                        ),
+                        "min_workers": int(min_workers),
+                    },
+                    "template": scraper_cfg.get(
+                        "template", {}
+                    ),
+                }
+                save_scraper_config(new_cfg)
+                st.success(
+                    "✅ Settings saved to "
+                    "`scraper_config.json`!"
+                )
+
+        with col_reset_cfg:
+            if st.button(
+                "🔄 Reset Defaults",
+                use_container_width=True,
+                key="li_reset_settings",
+            ):
+                default_cfg = {
+                    "linkedin": {
+                        "feed_url": (
+                            "https://www.linkedin.com"
+                            "/feed/"
+                        ),
+                        "max_posts": 20,
+                        "empty_streak_limit": 10,
+                        "scroll_amount": 3,
+                        "scroll_delay_seconds": 0.8,
+                        "post_load_wait_seconds": 1.0,
+                    },
+                    "ocr": {
+                        "languages": ["en"],
+                        "use_gpu": False,
+                        "warm_up_on_start": True,
+                    },
+                    "resource": {
+                        "max_worker_cap": 5,
+                        "cpu_overload_threshold": 80,
+                        "ram_per_worker_gb": 2.0,
+                        "min_workers": 2,
+                    },
+                    "template": {
+                        "mode": "random",
+                        "fixed_template_index": None,
+                        "no_consecutive_repeat": True,
+                    },
+                }
+                save_scraper_config(default_cfg)
+                st.success("✅ Settings reset to defaults!")
+                st.rerun()
+
+    # ── Live System Resources ────────────────────────
+    st.markdown("#### 💻 Live System Resources")
+    try:
+        from resource_manager import get_system_stats
+        stats = get_system_stats(scraper_cfg)
+        col_r1, col_r2, col_r3 = st.columns(3)
+        col_r1.metric(
+            "CPU Usage",
+            f"{stats['cpu_percent']}%",
+        )
+        col_r2.metric(
+            "RAM Free",
+            f"{stats['ram_free_gb']} GB "
+            f"/ {stats['ram_total_gb']} GB",
+        )
+        col_r3.metric(
+            "Auto Workers",
+            stats["safe_workers"],
+        )
+    except Exception:
+        st.caption(
+            "Install psutil to see live resource stats."
+        )
+
+    st.markdown("---")
+
+    # ── Scraping Controls ────────────────────────────
+    st.markdown("#### 🚀 Scraping Controls")
+    col_launch, col_clear = st.columns([2, 1])
+
+    with col_launch:
+        launch_btn = st.button(
+            "🚀 Launch Edge & Start Scraping",
+            type="primary",
+            use_container_width=True,
+            key="li_launch_btn",
+            disabled=st.session_state.li_scraping,
+        )
+
+    with col_clear:
+        if st.button(
+            "🗑️ Clear Found Emails",
+            use_container_width=True,
+            key="li_clear_btn",
+        ):
+            st.session_state.li_found_emails = []
+            st.rerun()
+
+    # ── Live Scraping Progress ───────────────────────
+    if launch_btn:
+        st.session_state.li_scraping = True
+        st.session_state.li_found_emails = []
+
+        try:
+            from linkedin_scraper.window_manager import (
+                ensure_edge_ready,
+            )
+            from linkedin_scraper.scroller import (
+                scroll_and_scrape,
+            )
+            from linkedin_scraper.ocr_extractor import (
+                warm_up_ocr,
+            )
+
+            current_scraper_cfg = get_scraper_config()
+
+            # Warm up OCR in background
+            if current_scraper_cfg.get(
+                "ocr", {}
+            ).get("warm_up_on_start", True):
+                warm_up_ocr(
+                    current_scraper_cfg.get("ocr", {})
+                )
+
+            # Launch / focus Edge
+            with st.spinner(
+                "Launching Edge browser..."
+            ):
+                ready = ensure_edge_ready(
+                    current_scraper_cfg
+                    .get("linkedin", {})
+                    .get(
+                        "feed_url",
+                        "https://www.linkedin.com"
+                        "/feed/",
+                    )
+                )
+
+            if not ready:
+                st.error(
+                    "❌ Could not find or launch Edge. "
+                    "Please open Edge manually with "
+                    "LinkedIn and try again."
+                )
+                st.session_state.li_scraping = False
+            else:
+                st.success(
+                    "✅ Edge is ready. Starting scan..."
+                )
+
+                progress_placeholder = st.empty()
+                log_placeholder = st.empty()
+                log_lines: list[str] = []
+
+                try:
+                    from resource_manager import (
+                        get_safe_workers,
+                    )
+                    workers = get_safe_workers(
+                        current_scraper_cfg
+                    )
+                except Exception:
+                    workers = 2
+
+                for event in scroll_and_scrape(
+                    scraper_cfg=current_scraper_cfg,
+                    workers=workers,
+                ):
+                    ev = event.get("event")
+
+                    if ev == "started":
+                        log_lines.append(
+                            "🟢 Scraping started..."
+                        )
+
+                    elif ev == "skipped":
+                        log_lines.append(
+                            f"⚡ Post "
+                            f"{event['post']} — "
+                            f"{event['reason']}, "
+                            f"skipped"
+                        )
+
+                    elif ev == "found":
+                        email = event["email"]
+                        st.session_state\
+                            .li_found_emails\
+                            .append(email)
+                        log_lines.append(
+                            f"✅ Post "
+                            f"{event['post']} — "
+                            f"new: {email}"
+                        )
+
+                    elif ev == "duplicate":
+                        log_lines.append(
+                            f"🔁 Post "
+                            f"{event['post']} — "
+                            f"duplicate: "
+                            f"{event['email']}, "
+                            f"skipped"
+                        )
+
+                    elif ev == "streak":
+                        log_lines.append(
+                            f"⚠️ {event['count']} "
+                            f"consecutive posts with "
+                            f"no new emails"
+                        )
+                        st.session_state\
+                            .li_streak_paused = True
+
+                    elif ev == "error":
+                        log_lines.append(
+                            f"❌ {event['message']}"
+                        )
+                        break
+
+                    elif ev == "done":
+                        log_lines.append(
+                            f"🏁 Done! Found "
+                            f"{event['total_found']} "
+                            f"new emails across "
+                            f"{event['posts']} posts."
+                        )
+
+                    # Update live log display
+                    log_placeholder.code(
+                        "\n".join(log_lines[-20:]),
+                        language="text",
+                    )
+                    progress_placeholder.caption(
+                        f"Found so far: "
+                        f"**{len(st.session_state.li_found_emails)}** "
+                        f"new emails"
+                    )
+
+        except ImportError as imp_err:
+            st.error(
+                f"❌ Missing dependency: {imp_err}. "
+                f"Run: pip install mss easyocr "
+                f"pyautogui pygetwindow"
+            )
+        except Exception as err:
+            st.error(f"❌ Scraping error: {err}")
+        finally:
+            st.session_state.li_scraping = False
+
+    # ── Found Emails Display ─────────────────────────
+    found = st.session_state.li_found_emails
+    if found:
+        st.markdown(
+            f"#### 📋 Found This Session "
+            f"({len(found)} emails)"
+        )
+        st.code("\n".join(found), language="text")
+
+        st.markdown("---")
+
+        # ── Template Selection ───────────────────────
+        st.markdown("#### 📧 Template Selection")
+
+        col_tmpl1, col_tmpl2 = st.columns([2, 1])
+        with col_tmpl1:
+            tmpl_mode = st.radio(
+                "Template mode:",
+                ["🎲 Random (no consecutive repeats)",
+                 "📄 Specific template"],
+                key="li_tmpl_mode",
+                horizontal=True,
+            )
+
+        available_tmpls: list[int] = []
+        try:
+            from ai_email_writer.generator import (
+                get_available_templates,
+            )
+            available_tmpls = get_available_templates()
+        except Exception:
+            available_tmpls = [1, 2, 3, 4, 5]
+
+        fixed_idx = None
+        if "Specific" in tmpl_mode:
+            with col_tmpl2:
+                fixed_idx = st.selectbox(
+                    "Select template:",
+                    options=available_tmpls,
+                    key="li_fixed_tmpl",
+                )
+
+        # Preview selected template
+        try:
+            from ai_email_writer.generator import (
+                fill_template,
+            )
+            preview_idx = (
+                fixed_idx
+                if fixed_idx is not None
+                else (
+                    available_tmpls[0]
+                    if available_tmpls
+                    else 1
+                )
+            )
+            profile = (
+                st.session_state.get(
+                    "candidate_profile_data"
+                )
+                or get_candidate_profile()
+            )
+            preview_body = fill_template(
+                template_index=preview_idx,
+                profile=profile,
+                recipient_name="[Recipient]",
+            )
+            if preview_body:
+                with st.expander(
+                    f"👁️ Preview template "
+                    f"{preview_idx}",
+                    expanded=False,
+                ):
+                    st.text(preview_body[:500] + "...")
+        except Exception:
+            pass
+
+        # Save template config
+        new_tmpl_cfg = {
+            "mode": (
+                "random"
+                if "Random" in tmpl_mode
+                else "fixed"
+            ),
+            "fixed_template_index": fixed_idx,
+            "no_consecutive_repeat": True,
+        }
+
+        st.markdown("---")
+
+        # ── Send Button ──────────────────────────────
+        send_li_btn = st.button(
+            "📤 Send via Template & Save to DB",
+            type="primary",
+            use_container_width=True,
+            key="li_send_btn",
+        )
+
+        if send_li_btn:
+            li_sender = sender_email
+            li_password = sender_password
+
+            if not li_sender or not li_password:
+                st.error(
+                    "Please provide Gmail address and "
+                    "App Password in the sidebar."
+                )
+            else:
+                # Build template sequence
+                try:
+                    from ai_email_writer.generator import (
+                        get_template_sequence,
+                        fill_template,
+                    )
+                    from email_sender.batch import (
+                        run_email_batch_parallel,
+                    )
+                    from email_db_helper import (
+                        ingest_and_save_emails,
+                    )
+
+                    profile = (
+                        st.session_state.get(
+                            "candidate_profile_data"
+                        )
+                        or get_candidate_profile()
+                    )
+                    email_conf = get_email_config()
+                    subject = (
+                        st.session_state.subject_line
+                        or email_conf.get(
+                            "subject", "Job Application"
+                        )
+                    )
+
+                    # Save template cfg
+                    updated_scraper = get_scraper_config()
+                    updated_scraper[
+                        "template"
+                    ] = new_tmpl_cfg
+                    save_scraper_config(updated_scraper)
+
+                    tmpl_sequence = get_template_sequence(
+                        count=len(found),
+                        template_cfg=new_tmpl_cfg,
+                    )
+
+                    send_progress = st.empty()
+                    send_log: list[str] = []
+                    sent_count = 0
+                    failed_count = 0
+
+                    for idx, (
+                        email, tmpl_idx
+                    ) in enumerate(
+                        zip(found, tmpl_sequence),
+                        start=1,
+                    ):
+                        from ai_email_writer.recipient\
+                            import infer_recipient_name
+                        rec_name = (
+                            infer_recipient_name(email)
+                            or "there"
+                        )
+                        body = fill_template(
+                            template_index=tmpl_idx,
+                            profile=profile,
+                            recipient_name=rec_name,
+                        )
+
+                        if not body:
+                            send_log.append(
+                                f"⚠️ {email} — "
+                                f"template {tmpl_idx} "
+                                f"not found, skipped"
+                            )
+                            continue
+
+                        try:
+                            from email_sender.sender\
+                                import send_email
+                            success = send_email(
+                                recipient_email=email,
+                                subject=subject,
+                                body=body,
+                                sender_email=li_sender,
+                                sender_password=(
+                                    li_password
+                                ),
+                                look_back=int(
+                                    email_conf.get(
+                                        "look_back", 1
+                                    )
+                                ),
+                            )
+                            if success:
+                                sent_count += 1
+                                send_log.append(
+                                    f"✅ {email} — "
+                                    f"sent "
+                                    f"(template "
+                                    f"{tmpl_idx})"
+                                )
+                            else:
+                                failed_count += 1
+                                send_log.append(
+                                    f"❌ {email} — "
+                                    f"failed"
+                                )
+                        except Exception as se:
+                            failed_count += 1
+                            send_log.append(
+                                f"❌ {email} — "
+                                f"error: {se}"
+                            )
+
+                        send_progress.code(
+                            "\n".join(send_log),
+                            language="text",
+                        )
+
+                    # Save all found emails to DB
+                    ingest_and_save_emails(
+                        raw_input=found,
+                        create_timestamped_backup=True,
+                    )
+
+                    st.success(
+                        f"🎉 Done! Sent: **{sent_count}** "
+                        f"| Failed: **{failed_count}** "
+                        f"| Saved to Email_Storage.json"
+                    )
+
+                except Exception as send_err:
+                    st.error(
+                        f"❌ Send error: {send_err}"
+                    )
+    else:
+        st.info(
+            "No emails found yet. "
+            "Click **🚀 Launch Edge & Start Scraping** "
+            "to begin."
+        )

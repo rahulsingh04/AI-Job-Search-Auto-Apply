@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ai-job-auto-apply"
-version = "0.3.0"
+version = "0.4.0"
 description = "AI-powered job-application email sender using local Ollama models and Streamlit UI"
 authors = ["RAHUL KUMAR SINGH <javarahul04@gmail.com>"]
 readme = "README.md"
@@ -9,6 +9,8 @@ packages = [
     { include = "email_sender", from = "src" },
     { include = "config_loader.py", from = "src" },
     { include = "email_db_helper.py", from = "src" },
+    { include = "resource_manager.py", from = "src" },
+    { include = "linkedin_scraper", from = "src" },
 ]
 
 [tool.poetry.dependencies]
@@ -23,6 +25,11 @@ openpyxl = ">=3.1.0,<4.0.0"
 pypdf = ">=4.0.0,<7.0.0"
 python-docx = ">=1.1.0,<2.0.0"
 watchdog = ">=3.0.0,<7.0.0"
+psutil = ">=5.9.0"
+mss = ">=9.0.0"
+easyocr = ">=1.7.0"
+pyautogui = ">=0.9.54"
+pygetwindow = ">=0.0.9"
 
 [tool.poetry.group.dev]
 optional = true
