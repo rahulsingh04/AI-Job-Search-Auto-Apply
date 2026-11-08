@@ -1,0 +1,56 @@
+﻿# Virtual environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Local email storage
+Email_Storage*
+
+# IDE settings
+.vscode/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Personal resume
+RAHUL_SINGH_3YR_EXPERIENCE_DATA_SCIENTIST_.pdf
+
+# Email storage files
+email_storage*
+email_storage_file*
+
+# Python cache directories
+__pycache__/
+
+# PDF and Microsoft Word documents
+*.pdf
+*.doc
+*.docx
+*.docm
+*.dot
+*.dotx
+*.dotm
+
+# Python packaging and build artifacts
+.eggs/
+wheels/
+pip-wheel-metadata/
+# Python caches
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+env/
+# Launcher configuration backups
+.launcher-config-backup-*/

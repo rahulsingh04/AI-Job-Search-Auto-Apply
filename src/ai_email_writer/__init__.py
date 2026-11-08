@@ -1,0 +1,74 @@
+"""AI-powered professional email writer using local Ollama models."""
+
+__all__ = [
+    "generate_professional_email",
+    "generate_email_with_fallback",
+    "EmailResponse",
+    "get_greeting_name",
+    "infer_recipient_name",
+    "CandidateProfile",
+    "parse_resume_to_profile",
+    "extract_profile_via_regex",
+    "extract_text_from_file",
+    "save_candidate_profile_config",
+    "generate_resume_templates",
+    "load_and_render_body_template",
+]
+
+
+def __getattr__(name):
+    """Lazy imports to avoid pulling in heavy dependencies at package level."""
+
+    if name == "generate_professional_email":
+        from .generator import generate_professional_email
+        return generate_professional_email
+
+    if name == "generate_email_with_fallback":
+        from .generator import generate_email_with_fallback
+        return generate_email_with_fallback
+
+    if name == "EmailResponse":
+        from .schemas import EmailResponse
+        return EmailResponse
+
+    if name == "get_greeting_name":
+        from .recipient import get_greeting_name
+        return get_greeting_name
+
+    if name == "infer_recipient_name":
+        from .recipient import infer_recipient_name
+        return infer_recipient_name
+
+    if name == "generate_resume_templates":
+        from .templates import generate_resume_templates
+        return generate_resume_templates
+
+    if name == "load_and_render_body_template":
+        from .templates import load_and_render_body_template
+        return load_and_render_body_template
+
+    if name in (
+        "CandidateProfile",
+        "parse_resume_to_profile",
+        "extract_profile_via_regex",
+        "extract_text_from_file",
+        "save_candidate_profile_config",
+    ):
+        from .resume_parser import (
+            CandidateProfile,
+            parse_resume_to_profile,
+            extract_profile_via_regex,
+            extract_text_from_file,
+            save_candidate_profile_config,
+        )
+        if name == "CandidateProfile":
+            return CandidateProfile
+        elif name == "parse_resume_to_profile":
+            return parse_resume_to_profile
+        elif name == "extract_profile_via_regex":
+            return extract_profile_via_regex
+        elif name == "extract_text_from_file":
+            return extract_text_from_file
+        return save_candidate_profile_config
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

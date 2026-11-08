@@ -1,0 +1,10 @@
+Hi,
+
+I am interested in exploring suitable opportunities that align with my professional background. I currently work as {current_role} and previously worked as {previous_role}, with {experience} of experience.
+
+With an educational background in {education}, I have developed skills in **{key_skills}** and applied them through projects such as **{project}**.
+
+I would be glad to discuss how my experience and technical skills could contribute to your team. Please find my resume attached for your review.
+
+Best regards,  
+{candidate_name}

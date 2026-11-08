@@ -1,0 +1,8 @@
+Hi,
+
+I am currently working as {current_role}, with previous experience as {previous_role} and {experience} of professional experience. My background includes {education}, key skills in {key_skills}, and project experience in {project}.
+
+I would appreciate the opportunity to discuss how my profile aligns with your team's requirements. Please find my resume attached for your consideration.
+
+Best regards,  
+{candidate_name}
